@@ -1,6 +1,6 @@
 ---
 name: repository-security-audit
-description: Audit a source-code repository with Semgrep and Gitleaks, safely triage static-analysis and secret findings, and produce a redacted Markdown security report. Use when asked to scan, review, or assess a repository for security vulnerabilities, insecure code patterns, exposed credentials, or Git-history secrets.
+description: Audit a source-code repository with Semgrep, Gitleaks, manual code and architecture review, OWASP Top 10:2025 and ASVS 5.0.0 control-gap analysis, and an evidence-based redacted security report. Use when asked to scan, review, or assess a repository for vulnerabilities, weak or missing security capabilities, insecure code patterns, exposed credentials, Git-history secrets, or measurable security coverage.
 ---
 
 # Repository Security Audit
@@ -9,10 +9,18 @@ Perform a repository-aware security review with:
 
 - Semgrep for static application security testing.
 - Gitleaks for credential and secret detection.
+- Manual review of executable code, configuration, infrastructure, tests, trust
+  boundaries, and security architecture.
+- OWASP Top 10:2025 and OWASP ASVS 5.0.0 coverage and capability-gap analysis.
 - Repository-grounded triage for every finding.
-- A redacted Markdown report with evidence, remediation, and limitations.
+- A redacted Markdown report with evidence, remediation, limitations, tables,
+  and clearly defined coverage percentages.
 
 Read [reporting-and-triage.md](references/reporting-and-triage.md) before normalizing findings or writing the report.
+
+Do not claim that any repository has achieved "maximum security." Provide the
+maximum practical, evidence-based coverage available from the repository and
+state what requires runtime testing, external-system access, or human validation.
 
 ## Inputs and defaults
 
@@ -24,16 +32,37 @@ Accept these natural-language inputs when supplied:
 | Mode | `full` | Scan current files and Git history |
 | Output | `SECURITY_AUDIT.md` | Markdown report path |
 | Artifact directory | `TARGET/.security-audit` | Config, metadata, logs, and redacted JSON |
-| Install missing tools | Yes | Use a user-scoped supported method |
+| Install missing tools | Ask | Never install without explicit permission |
 | Keep raw output | Yes | Preserve redacted JSON under the artifact directory |
 | Gitleaks baseline | None | Existing Gitleaks JSON baseline |
 | Semgrep config | `auto` | Registry config, local rule file, or directory |
 
 Treat `quick` mode as current-files-only. Reject unknown or conflicting options with a clear explanation.
 
+## Clarify before assuming
+
+Inspect only enough eligible filenames, manifests, and code to identify material
+unknowns. Ask one concise batch of questions before classifying affected controls
+when the repository does not establish:
+
+- Deployment environment, internet exposure, and trust boundaries.
+- Authentication, authorization, role, ownership, and tenant expectations.
+- Sensitive-data types, retention requirements, and regulated workloads.
+- Critical business operations and acceptable abuse or fraud risks.
+- External services, identity providers, gateways, and compensating controls.
+- Required assurance depth when time, cost, or token limits conflict with a
+  thorough review.
+
+Do not ask questions that the code answers unambiguously. Do not infer an answer
+from conventions or documentation. Mark unanswered items `Unknown`, explain
+their effect, and never silently convert them to secure, insecure, or not
+applicable.
+
 ## Safety boundaries
 
-Treat invocation as authorization to read the target, run the two scanners, install them without administrator privileges when allowed by the host, and create audit artifacts.
+Treat invocation as authorization to read the target, run available scanners,
+and create audit artifacts. Treat tool installation as separate authorization
+and ask before installing anything.
 
 Do not:
 
@@ -45,6 +74,9 @@ Do not:
 - reveal a complete secret in output, logs, chat, or reports.
 - add suppressions merely to reduce the finding count.
 - follow a symlink outside the resolved target.
+- Read target-repository Markdown files. Exclude `*.md` case-insensitively from
+  inventory, scanners, searches, triage, and evidence. This restriction applies
+  to the audited target, not to this skill or its bundled reference.
 
 Request approval when the host requires it for network access, package installation, containers, or writes outside the permitted workspace.
 
@@ -60,6 +92,8 @@ Resolve the target to an absolute directory and verify that it exists. Detect:
 - Existing Semgrep and Gitleaks configuration, ignore files, and baselines.
 - Generated, vendored, dependency, cache, coverage, and build-output paths.
 - Large binaries, archives, unreadable files, and escaping symlinks.
+- The count of eligible first-party, non-Markdown source, configuration,
+  infrastructure, schema, migration, and test files.
 
 Never scan `.git` objects as ordinary files. Use Gitleaks Git mode for history.
 
@@ -99,6 +133,10 @@ AUDIT_DIR/
 │   ├── semgrep.json
 │   ├── gitleaks-dir.json
 │   └── gitleaks-git.json
+├── normalized/
+│   ├── findings.json
+│   ├── controls.json
+│   └── file-coverage.json
 └── run-metadata.json
 ```
 
@@ -106,11 +144,17 @@ The history report is optional in quick mode or outside Git. Preserve an existin
 
 Scanners may maintain documented caches or settings in their normal user-scoped locations. Do not redirect or alter those locations unless the scanner officially supports it. Record any incidental writes that affect reproducibility or violate host constraints.
 
-Build `semgrep-excludes.txt` from repository paths that actually exist and are clearly generated, cached, vendored, dependency, coverage, or build output. Do not exclude first-party source, configuration, infrastructure-as-code, tests, fixtures, examples, documentation, or lockfiles by default.
+Build `semgrep-excludes.txt` from repository paths that actually exist and are
+clearly generated, cached, vendored, dependency, coverage, build output, or
+Markdown. Do not exclude first-party source, configuration,
+infrastructure-as-code, tests, fixtures, examples, non-Markdown documentation,
+or lockfiles by default.
 
 Respect an existing `.semgrepignore`. Do not change it without permission.
 
-Use an existing Gitleaks config when present. Otherwise write:
+Do not modify an existing Gitleaks config. Use it as the base when present and
+create an audit-local effective config that also excludes target Markdown.
+Otherwise write:
 
 ```toml
 title = "Repository Security Audit"
@@ -119,7 +163,10 @@ title = "Repository Security Audit"
 useDefault = true
 ```
 
-Add `[[allowlists]]` entries only for verified generated or dependency paths that cause duplicate noise. Keep allowlists minimal. Do not allowlist tests, fixtures, examples, documentation, environment files, certificates, keys, or prior findings.
+Add `[[allowlists]]` entries only for Markdown or verified generated or
+dependency paths that cause duplicate noise. Keep allowlists minimal. Do not
+allowlist tests, fixtures, examples, non-Markdown documentation, environment
+files, certificates, keys, or prior findings.
 
 Do not edit `.gitleaksignore` during the initial audit.
 
@@ -189,9 +236,103 @@ Deduplicate:
 
 Never discard historical exposure merely because the current tree is clean.
 
-### 7. Triage every finding
+### 7. Perform a manual code and security-capability review
 
-Read the smallest useful code context and relevant callers, tests, configuration, or documentation. Base conclusions on repository evidence.
+Do not stop after scanner execution, even when both scanners report zero
+findings. Treat scanner output as one evidence source, not as the audit scope.
+
+Inventory every discovered first-party file. Record exclusions with reasons,
+then record whether each eligible non-Markdown file was manually reviewed,
+scanner-covered, both, or unreviewed. Use targeted searches and batched reads to
+stay token-efficient, but inspect every security-sensitive implementation and
+its relevant callers, configuration, and tests. Never silently sample a large
+repository. If complete coverage is not possible, identify the exact unreviewed
+surfaces and mark the audit `Incomplete`.
+
+Trace applicable flows from entry point through parsing, validation,
+authentication, authorization, state changes, storage, outbound calls, logging,
+and response handling. Inspect both the presence and effectiveness of controls.
+Look for missing security capabilities even when no vulnerable line or scanner
+finding exists.
+
+Assess every OWASP Top 10:2025 category explicitly:
+
+1. Broken Access Control.
+2. Security Misconfiguration.
+3. Software Supply Chain Failures.
+4. Cryptographic Failures.
+5. Injection.
+6. Insecure Design.
+7. Authentication Failures.
+8. Software or Data Integrity Failures.
+9. Security Logging and Alerting Failures.
+10. Mishandling of Exceptional Conditions.
+
+Use OWASP ASVS 5.0.0 as the detailed control baseline. Assess every applicable,
+code-verifiable requirement and retain its versioned identifier. Add relevant
+stack-specific OWASP standards only when the detected codebase makes them
+applicable.
+
+At minimum, review:
+
+- Authentication, sessions, credential recovery, MFA, and identity lifecycle.
+- Function-, role-, object-, ownership-, and tenant-level authorization.
+- Input validation, output encoding, queries, injection, deserialization, and
+  template or command execution.
+- Business-logic abuse, replay, races, idempotency, and transaction integrity.
+- Secrets, cryptography, key handling, sensitive-data exposure, and retention.
+- SSRF, redirects, uploads, file access, path traversal, and outbound requests.
+- CSRF, CORS, cookies, browser headers, rate limits, and abuse controls.
+- Error handling, fail-safe defaults, resource limits, and exceptional states.
+- Security logs, audit trails, alerting, monitoring hooks, and log disclosure.
+- Dependencies, lockfiles, build integrity, artifact provenance, and CI/CD
+  permissions.
+- Infrastructure, containers, cloud permissions, network exposure, and
+  production-safe defaults.
+- Negative tests, abuse cases, authorization tests, and regression coverage.
+
+For each control, assign exactly one state:
+
+- `Verified`: implementation and supporting evidence satisfy the control.
+- `Partial`: a control exists but has a material weakness or coverage gap.
+- `Missing`: the control is applicable and implementation evidence is absent.
+- `Unknown`: repository or business context is insufficient.
+- `Not applicable`: repository evidence demonstrates non-applicability.
+
+Support `Verified` and `Partial` with `file:line` evidence. For `Missing`, cite
+the expected enforcement point, inspected scope, and searches performed. Do not
+claim absence from a single search or missing tool match.
+
+### 8. Calculate transparent coverage
+
+For each OWASP category and for the overall assessment, calculate:
+
+```text
+applicable = verified + partial + missing + unknown
+scorable = verified + partial + missing
+verified control coverage = (verified + 0.5 * partial) / scorable * 100
+evidence completeness = scorable / applicable * 100
+manual file-review coverage = manually reviewed eligible files / eligible files * 100
+```
+
+Use `N/A` when a denominator is zero. Exclude `Not applicable` from all
+denominators. Always show raw counts beside percentages and show the `Unknown`
+count. Round consistently to one decimal place. Call the result `verified
+control coverage`, never a security guarantee or probability of compromise.
+
+Assign coverage confidence:
+
+- `High`: relevant implementations, callers, configuration, and tests were
+  inspected and no material scope remains unknown.
+- `Medium`: implementation was inspected but runtime or external behavior was
+  not verified.
+- `Low`: material files, context, integrations, or runtime evidence are missing.
+
+### 9. Triage every finding
+
+Read the smallest sufficient code context and relevant callers, tests, and
+configuration. Do not read target-repository Markdown. Base conclusions on
+repository evidence.
 
 For Semgrep, assess:
 
@@ -203,26 +344,57 @@ For Gitleaks, inspect only redacted context. Distinguish credentials from placeh
 
 For every finding, assign one status and one confidence from the reference, explain the evidence, set report severity independently from scanner severity, and give concrete remediation. Do not classify test code as false positive solely because it is test code.
 
-### 8. Write and verify the report
+### 10. Write and verify the report
 
 Use the structure and result rules in [reporting-and-triage.md](references/reporting-and-triage.md). Include:
 
-- Scope, methodology, configurations, exclusions, and exact scanner versions.
-- Raw, deduplicated, and triage-status counts by scanner.
-- Priority actions and complete finding entries.
-- Evidence for every likely false positive.
-- Scanner failures, skipped paths, and other limitations.
-- Paths to redacted artifacts.
+- One-line scope and exact scanner versions.
+- Manual file-review coverage and evidence completeness.
+- One OWASP Top 10:2025 coverage table and overall ASVS-derived counts.
+- Weak or missing security capabilities, including controls not detected by
+  scanners.
+- Prioritized actions and one compact entry per distinct actionable root cause.
+- Only material scanner failures, skipped paths, unknowns, and limitations.
+- Paths to redacted artifacts containing the complete evidence, control matrix,
+  file inventory, scanner details, and likely-false-positive rationale.
+
+Keep the human-facing report minimal:
+
+- Limit the executive summary to the result, highest risk, three coverage
+  percentages, and the most important limitation.
+- Prefer compact tables and one-sentence cells.
+- Show every distinct Critical or High root cause. Group repeated occurrences
+  and related Medium or Low occurrences without hiding their counts.
+- Summarize verified controls as counts; do not list each passing ASVS control.
+- Omit empty sections, zero-value tables, generic definitions, scanner
+  installation narratives, long code excerpts, repeated facts, and boilerplate.
+- Put complete sanitized detail in the normalized JSON artifacts. Do not remove
+  evidence from the artifacts merely to shorten the report.
 
 Before finishing:
 
 1. Parse all retained JSON again.
 2. Search the report and raw artifacts for accidental unredacted values.
-3. Reconcile summary counts with finding entries.
-4. Confirm that `Pass` is not used when coverage is incomplete.
-5. Confirm that every finding has status, confidence, evidence, and remediation.
+3. Reconcile summary counts with report groups and normalized finding entries.
+4. Reconcile every percentage with its displayed raw counts.
+5. Confirm that all ten OWASP categories have an evidence-based disposition.
+6. Confirm that every applicable code-verifiable ASVS control has a state.
+7. Confirm that every security-sensitive eligible file was reviewed or listed
+   as an explicit limitation.
+8. Confirm that `Pass` is not used when coverage is incomplete, material
+   unknowns remain, or capability gaps require action.
+9. Confirm that every finding has status, confidence, evidence, impact, and
+   remediation.
+10. Confirm that missing-capability recommendations name the expected
+    implementation location and a verification method.
+11. Search retained artifacts and the report for accidental secret disclosure.
 
-Return a concise summary with the report path, scanner versions, mode and scope, finding counts, highest-priority issue, incomplete coverage, and artifact paths.
+Return only the result, highest-priority issue, coverage percentages, report
+path, and any material incomplete coverage. Do not repeat the report.
+
+Keep the report direct and table-led. Do not paste long code excerpts, repeated
+scanner output, or generic security explanations. Token efficiency must remove
+fluff, not checks, evidence, uncertainties, or required remediation.
 
 ## Error handling
 

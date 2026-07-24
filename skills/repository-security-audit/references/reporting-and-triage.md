@@ -30,7 +30,7 @@ Safe evidence can include:
 - A redacted description of relevant code.
 - Call-site or data-flow explanation.
 - Commit identifier for historical exposure.
-- Repository documentation that demonstrates a value is fake.
+- Relevant non-Markdown configuration or test evidence.
 
 Never include:
 
@@ -40,9 +40,14 @@ Never include:
 
 ## Overall result
 
-- Use **Pass** only when both scanners completed successfully and no `Confirmed`, `Likely true positive`, or `Needs human review` findings remain.
-- Use **Findings require action** when at least one actionable or unresolved finding exists.
-- Use **Incomplete** when either scanner failed, an expected report could not be parsed, installation failed, or scope was materially restricted.
+- Use **Pass** only when both scanners and the manual review completed, no
+  actionable or unresolved finding remains, every applicable code-verifiable
+  control was assessed, and no material capability gap or unknown remains.
+- Use **Findings require action** when at least one actionable finding, `Partial`
+  control, or `Missing` control exists.
+- Use **Incomplete** when either scanner failed, an expected report could not be
+  parsed, installation failed, review scope was materially restricted, or
+  material controls remain `Unknown`.
 
 Never report `Pass` with incomplete coverage.
 
@@ -53,105 +58,53 @@ Never report `Pass` with incomplete coverage.
 
 ## Executive summary
 
-- **Target:** `<relative or safe path>`
-- **Scan date:** `<ISO-8601 timestamp>`
-- **Mode:** `quick` or `full`
-- **Overall result:** `Pass`, `Findings require action`, or `Incomplete`
-- **Semgrep:** `<version and status>`
-- **Gitleaks:** `<version and status>`
+- **Result:** `Pass`, `Findings require action`, or `Incomplete`
+- **Highest risk:** `<one sentence or None>`
+- **Coverage:** controls `<earned>/<scorable> (<percentage>)`; evidence
+  `<scorable>/<applicable> (<percentage>)`; files `<reviewed>/<eligible> (<percentage>)`
+- **Material limitation:** `<one sentence or None>`
 
-Summarize the most important result and material limitations.
+**Scope:** `<target>; <mode>; <commit>; Semgrep <version/status>; Gitleaks <version/status>`
 
-## Scope and methodology
+## OWASP Top 10:2025 coverage
 
-Describe the scanned scope, detected languages and frameworks, Git-history
-coverage, configurations, exclusions, and incomplete coverage.
+| Category | V/P/M/U | Coverage | Confidence | Main gap |
+|---|---:|---:|---|---|
+| A01 Broken Access Control | 0/0/0/0 | N/A | Low | None established |
 
-## Results summary
+Include all ten categories.
 
-| Scanner | Raw | Deduplicated | Confirmed | Likely true | Likely false | Human review |
-|---|---:|---:|---:|---:|---:|---:|
-| Semgrep | 0 | 0 | 0 | 0 | 0 | 0 |
-| Gitleaks | 0 | 0 | 0 | 0 | 0 | 0 |
+## Required actions
 
-## Priority actions
+| Priority | Issue or missing capability | Evidence | Required action | Verify |
+|---|---|---|---|---|
+| P1 | `<concise root cause>` | `path/file.ext:line` | `<specific fix>` | `<test>` |
 
-1. Highest-priority remediation.
-2. Secret rotation or history cleanup when applicable.
-3. Configuration or code-hardening action.
+Group repeated occurrences. Include every distinct Critical and High root cause
+and summarize related Medium and Low occurrences with counts. Omit this section
+when no action is required.
 
-## Findings
+## Material limitations
 
-### SG-001 — Finding title
+List only limitations that can change the result, one sentence each. Omit when
+there are none.
 
-- **Scanner:** Semgrep
-- **Rule:** `rule-id`
-- **Severity:** High
-- **Scanner severity:** ERROR
-- **Status:** Likely true positive
-- **Confidence:** High
-- **Location:** `path/to/file.ext:10`
-- **Evidence:** Sanitized, repository-grounded explanation.
-- **Impact:** Concrete security consequence.
-- **Remediation:** Specific corrective action.
-- **False-positive rationale:** `Not applicable` or supporting evidence.
+## Detailed evidence
 
-### GL-001 — Possible credential exposure
-
-- **Scanner:** Gitleaks
-- **Rule:** `provider-rule`
-- **Severity:** Critical
-- **Status:** Needs human review
-- **Confidence:** Medium
-- **Location:** `path/to/file.ext:20`
-- **History:** Present in commit `<short hash>` or `Current tree only`
-- **Evidence:** Value fully redacted; explain why it appears credential-like.
-- **Impact:** Concrete consequence if valid.
-- **Remediation:** Rotate or revoke, adopt secret management, and clean history when required.
-- **False-positive rationale:** Evidence or `Insufficient evidence`.
-
-## Likely false positives
-
-List every likely false positive with its ID, evidence, and confidence. Keep each
-finding in the main findings section too.
-
-## Scanner and configuration details
-
-### Semgrep
-
-- Version:
-- Installation method:
-- Configuration:
-- Exclusions:
-- Duration:
-- Exit code:
-- Parse errors or skipped files:
-
-### Gitleaks
-
-- Version:
-- Installation method:
-- Configuration:
-- Scans performed:
-- Baseline:
-- Duration:
-- Exit codes:
-- Parse errors or skipped files:
-
-## Limitations
-
-State what the audit could not establish, including runtime behavior, deployed
-configuration, external service state, credential validity, incomplete history,
-unsupported languages, unreadable files, or scanner failures.
-
-## Artifacts
-
-- Redacted Semgrep JSON: `.security-audit/raw/semgrep.json`
-- Redacted Gitleaks directory JSON: `.security-audit/raw/gitleaks-dir.json`
-- Redacted Gitleaks history JSON: `.security-audit/raw/gitleaks-git.json`
-- Run metadata: `.security-audit/run-metadata.json`
-
-## Recommended next steps
-
-Provide prioritized actions and identify required human validation.
+- Findings: `.security-audit/normalized/findings.json`
+- Controls: `.security-audit/normalized/controls.json`
+- File coverage: `.security-audit/normalized/file-coverage.json`
+- Run metadata and scanner output: `.security-audit/`
 ```
+
+## Brevity rules
+
+- Keep the executive summary to four bullets.
+- Keep each table cell to one sentence.
+- Omit empty sections and non-material operational detail.
+- Do not repeat an issue in prose after presenting it in a table.
+- Do not list passing controls individually.
+- Store complete sanitized evidence, scanner metadata, false-positive rationale,
+  repeated locations, ASVS mappings, and file-level coverage in artifacts.
+- Never achieve brevity by hiding an actionable root cause, material unknown, or
+  result-changing limitation.
