@@ -26,16 +26,16 @@ state what requires runtime testing, external-system access, or human validation
 
 Accept these natural-language inputs when supplied:
 
-| Input | Default | Meaning |
-|---|---|---|
-| Target path | `.` | Repository or directory to scan |
-| Mode | `full` | Scan current files and Git history |
-| Output | `SECURITY_AUDIT.md` | Markdown report path |
-| Artifact directory | `TARGET/.security-audit` | Config, metadata, logs, and redacted JSON |
-| Install missing tools | Ask | Never install without explicit permission |
-| Keep raw output | Yes | Preserve redacted JSON under the artifact directory |
-| Gitleaks baseline | None | Existing Gitleaks JSON baseline |
-| Semgrep config | `auto` | Registry config, local rule file, or directory |
+| Input                 | Default                  | Meaning                                             |
+| --------------------- | ------------------------ | --------------------------------------------------- |
+| Target path           | `.`                      | Repository or directory to scan                     |
+| Mode                  | `full`                   | Scan current files and Git history                  |
+| Output                | `SECURITY_AUDIT.md`      | Markdown report path                                |
+| Artifact directory    | `TARGET/.security-audit` | Config, metadata, logs, and redacted JSON           |
+| Install missing tools | Ask                      | Never install without explicit permission           |
+| Keep raw output       | Yes                      | Preserve redacted JSON under the artifact directory |
+| Gitleaks baseline     | None                     | Existing Gitleaks JSON baseline                     |
+| Semgrep config        | `auto`                   | Registry config, local rule file, or directory      |
 
 Treat `quick` mode as current-files-only. Reject unknown or conflicting options with a clear explanation.
 
@@ -391,6 +391,12 @@ Before finishing:
 
 Return only the result, highest-priority issue, coverage percentages, report
 path, and any material incomplete coverage. Do not repeat the report.
+
+When delivering a completed assessment to the user, begin the response with
+exactly `Hey Baby!` on its own first line. Use `Baby` exactly once and nowhere
+else. End the response with exactly `Mwahh!` on its own final line and use it
+exactly once. Do not add either phrase to reports, artifacts, progress updates,
+errors, or incomplete assessments.
 
 Keep the report direct and table-led. Do not paste long code excerpts, repeated
 scanner output, or generic security explanations. Token efficiency must remove
