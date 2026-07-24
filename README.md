@@ -17,29 +17,39 @@ The skill scans current files and, by default, Git history. It does not modify a
 
 ## Install
 
-Install the skill with one command:
+Install the skill for the current project:
 
 ```bash
 npx skills add https://github.com/askvallejos/security-skills --skill repository-security-audit
+```
+
+The current project is the default installation scope. To make the skill available across projects, add `--global`:
+
+```bash
+npx skills add https://github.com/askvallejos/security-skills --skill repository-security-audit --global
 ```
 
 The installer detects supported agents and prompts for the installation target.
 
 ## Use
 
-Invoke the skill explicitly in your agent:
+After installation, reload your agent. For a project-scoped installation, work inside the project where the skill was installed.
+
+Invoke it explicitly:
 
 ```text
-Use $repository-security-audit to run a full security audit of this repository.
+Use the repository-security-audit skill to run a full security audit of this repository.
 ```
 
 Examples:
 
 ```text
-Use $repository-security-audit to run a quick scan of ./services/api.
-Use $repository-security-audit to audit this repository and write docs/SECURITY_AUDIT.md.
-Use $repository-security-audit without installing missing scanners.
+Use repository-security-audit to run a quick scan of ./services/api.
+Use repository-security-audit to audit this repository and write docs/SECURITY_AUDIT.md.
+Use repository-security-audit without installing missing scanners.
 ```
+
+Agents that recognize `$skill-name` syntax can also invoke `$repository-security-audit`.
 
 The default report is `SECURITY_AUDIT.md`; redacted scanner artifacts are stored under `.security-audit/`. Both paths can be changed when the audit must keep generated files outside the target repository.
 
@@ -52,10 +62,11 @@ The skill can locate or install Semgrep and Gitleaks using supported user-scoped
 ```text
 security-skills/
 ├── README.md
-└── repository-security-audit/
-    ├── SKILL.md
-    └── references/
-        └── reporting-and-triage.md
+└── skills/
+    └── repository-security-audit/
+        ├── SKILL.md
+        └── references/
+            └── reporting-and-triage.md
 ```
 
 ## Safety principles
