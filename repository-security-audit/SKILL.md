@@ -1,6 +1,6 @@
 ---
 name: repository-security-audit
-description: Audit a source-code repository with Semgrep and Gitleaks, safely triage static-analysis and secret findings, and produce a redacted Markdown security report. Use when Codex is asked to scan, review, or assess a repository for security vulnerabilities, insecure code patterns, exposed credentials, or Git-history secrets.
+description: Audit a source-code repository with Semgrep and Gitleaks, safely triage static-analysis and secret findings, and produce a redacted Markdown security report. Use when asked to scan, review, or assess a repository for security vulnerabilities, insecure code patterns, exposed credentials, or Git-history secrets.
 ---
 
 # Repository Security Audit

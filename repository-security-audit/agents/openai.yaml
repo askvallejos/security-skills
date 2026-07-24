@@ -1,4 +1,0 @@
-interface:
-  display_name: "Repository Security Audit"
-  short_description: "Audit repositories for code and secret risks"
-  default_prompt: "Use $repository-security-audit to audit this repository and produce a redacted security report."

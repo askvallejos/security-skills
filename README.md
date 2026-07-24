@@ -1,6 +1,6 @@
 # Security Skills
 
-Codex skills for practical, evidence-based repository security reviews.
+Reusable skills for practical, evidence-based repository security reviews.
 
 ## Included skill
 
@@ -17,20 +17,17 @@ The skill scans current files and, by default, Git history. It does not modify a
 
 ## Install
 
-Clone this repository, then copy or symlink the skill directory into your Codex skills directory:
+Install the skill with one command:
 
 ```bash
-git clone https://github.com/askvallejos/security-skills.git
-mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
-cp -R security-skills/repository-security-audit \
-  "${CODEX_HOME:-$HOME/.codex}/skills/"
+npx skills add https://github.com/askvallejos/security-skills --skill repository-security-audit
 ```
 
-Restart Codex after installation so it discovers the skill.
+The installer detects supported agents and prompts for the installation target.
 
 ## Use
 
-Invoke the skill explicitly:
+Invoke the skill explicitly in your agent:
 
 ```text
 Use $repository-security-audit to run a full security audit of this repository.
@@ -57,8 +54,6 @@ security-skills/
 ├── README.md
 └── repository-security-audit/
     ├── SKILL.md
-    ├── agents/
-    │   └── openai.yaml
     └── references/
         └── reporting-and-triage.md
 ```
@@ -73,4 +68,4 @@ security-skills/
 
 ## Contributing
 
-Keep skill instructions concise, preserve the redaction guarantees, and validate changes with Codex's skill validator before publishing.
+Keep skill instructions concise, preserve the redaction guarantees, and validate changes before publishing.
