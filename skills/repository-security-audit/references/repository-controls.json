@@ -1,0 +1,145 @@
+{
+  "version": "1.0.0",
+  "controls": [
+    {
+      "id": "RSA-01",
+      "framework": "Repository Security Audit Baseline",
+      "chapter": "Architecture",
+      "requirement": "Trust boundaries, entry points, sensitive assets, and external dependencies are identifiable from repository evidence.",
+      "owasp_categories": ["A06"]
+    },
+    {
+      "id": "RSA-02",
+      "framework": "Repository Security Audit Baseline",
+      "chapter": "Access control",
+      "requirement": "Every privileged operation enforces function-, role-, object-, ownership-, and tenant-level authorization as applicable.",
+      "owasp_categories": ["A01"]
+    },
+    {
+      "id": "RSA-03",
+      "framework": "Repository Security Audit Baseline",
+      "chapter": "Authentication",
+      "requirement": "Identity proofing, authentication, session handling, recovery, and identity lifecycle controls are implemented when identities are in scope.",
+      "owasp_categories": ["A07"]
+    },
+    {
+      "id": "RSA-04",
+      "framework": "Repository Security Audit Baseline",
+      "chapter": "Input handling",
+      "requirement": "Untrusted input is validated at the trust boundary and interpreted only by parameterized or context-safe APIs.",
+      "owasp_categories": ["A05"]
+    },
+    {
+      "id": "RSA-05",
+      "framework": "Repository Security Audit Baseline",
+      "chapter": "Output handling",
+      "requirement": "Output is encoded, escaped, or serialized for its destination context.",
+      "owasp_categories": ["A05"]
+    },
+    {
+      "id": "RSA-06",
+      "framework": "Repository Security Audit Baseline",
+      "chapter": "Files and outbound access",
+      "requirement": "File access, uploads, redirects, and outbound requests constrain paths, destinations, protocols, sizes, and content types.",
+      "owasp_categories": ["A01", "A05"]
+    },
+    {
+      "id": "RSA-07",
+      "framework": "Repository Security Audit Baseline",
+      "chapter": "Secrets",
+      "requirement": "Secrets are not committed and are retrieved, scoped, rotated, and redacted through an approved mechanism.",
+      "owasp_categories": ["A02", "A04"]
+    },
+    {
+      "id": "RSA-08",
+      "framework": "Repository Security Audit Baseline",
+      "chapter": "Cryptography",
+      "requirement": "Approved cryptographic algorithms, randomness, key handling, and transport protections are used for sensitive data.",
+      "owasp_categories": ["A04"]
+    },
+    {
+      "id": "RSA-09",
+      "framework": "Repository Security Audit Baseline",
+      "chapter": "Configuration",
+      "requirement": "Production configuration uses secure defaults, least privilege, explicit exposure, and environment separation.",
+      "owasp_categories": ["A02"]
+    },
+    {
+      "id": "RSA-10",
+      "framework": "Repository Security Audit Baseline",
+      "chapter": "Dependencies",
+      "requirement": "Dependencies are reproducibly pinned or locked and are checked against a current vulnerability advisory source.",
+      "owasp_categories": ["A03"]
+    },
+    {
+      "id": "RSA-11",
+      "framework": "Repository Security Audit Baseline",
+      "chapter": "Build integrity",
+      "requirement": "Build inputs, generated artifacts, releases, and update channels have verifiable integrity and provenance.",
+      "owasp_categories": ["A03", "A08"]
+    },
+    {
+      "id": "RSA-12",
+      "framework": "Repository Security Audit Baseline",
+      "chapter": "CI/CD",
+      "requirement": "Automation permissions, tokens, third-party actions, and deployment gates follow least privilege and immutable versioning.",
+      "owasp_categories": ["A03", "A08"]
+    },
+    {
+      "id": "RSA-13",
+      "framework": "Repository Security Audit Baseline",
+      "chapter": "Integrity",
+      "requirement": "Untrusted code, data, plugins, updates, and serialized objects are authenticated or constrained before use.",
+      "owasp_categories": ["A08"]
+    },
+    {
+      "id": "RSA-14",
+      "framework": "Repository Security Audit Baseline",
+      "chapter": "Error handling",
+      "requirement": "Exceptional conditions fail safely, preserve transaction integrity, release resources, and avoid sensitive disclosure.",
+      "owasp_categories": ["A10"]
+    },
+    {
+      "id": "RSA-15",
+      "framework": "Repository Security Audit Baseline",
+      "chapter": "Resource controls",
+      "requirement": "Rate, size, concurrency, recursion, and time limits constrain attacker-controlled resource use.",
+      "owasp_categories": ["A02", "A06", "A10"]
+    },
+    {
+      "id": "RSA-16",
+      "framework": "Repository Security Audit Baseline",
+      "chapter": "Business logic",
+      "requirement": "Critical operations resist replay, races, duplicate execution, state manipulation, and abuse of workflow assumptions.",
+      "owasp_categories": ["A01", "A06"]
+    },
+    {
+      "id": "RSA-17",
+      "framework": "Repository Security Audit Baseline",
+      "chapter": "Logging",
+      "requirement": "Security-relevant events are recorded with integrity and context without logging credentials or unnecessary sensitive data.",
+      "owasp_categories": ["A09"]
+    },
+    {
+      "id": "RSA-18",
+      "framework": "Repository Security Audit Baseline",
+      "chapter": "Alerting",
+      "requirement": "Material security events have actionable monitoring or alerting integration.",
+      "owasp_categories": ["A09"]
+    },
+    {
+      "id": "RSA-19",
+      "framework": "Repository Security Audit Baseline",
+      "chapter": "Data lifecycle",
+      "requirement": "Sensitive data collection, storage, exposure, retention, backup, and deletion are minimized and controlled.",
+      "owasp_categories": ["A04", "A06"]
+    },
+    {
+      "id": "RSA-20",
+      "framework": "Repository Security Audit Baseline",
+      "chapter": "Testing",
+      "requirement": "Tests cover negative cases, authorization boundaries, abuse cases, and regressions for security-sensitive behavior.",
+      "owasp_categories": ["A01", "A06", "A10"]
+    }
+  ]
+}

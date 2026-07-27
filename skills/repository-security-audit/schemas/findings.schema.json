@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/repository-security-audit/findings.schema.json",
+  "title": "Repository Security Audit Findings",
+  "type": "object",
+  "required": ["schema_version", "findings"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": 1},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "source",
+          "rule_id",
+          "scanner_severity",
+          "report_severity",
+          "triage_status",
+          "confidence",
+          "path",
+          "message",
+          "commits",
+          "evidence",
+          "impact",
+          "remediation"
+        ],
+        "properties": {
+          "id": {"type": "string", "pattern": "^(SG|GL|OSV|MAN)-[0-9]{3,}$"},
+          "source": {
+            "enum": ["Semgrep", "Gitleaks", "OSV-Scanner", "Manual"]
+          },
+          "rule_id": {"type": "string"},
+          "scanner_severity": {"type": "string"},
+          "report_severity": {
+            "enum": [
+              "Critical",
+              "High",
+              "Medium",
+              "Low",
+              "Informational",
+              "Unassigned"
+            ]
+          },
+          "triage_status": {
+            "enum": [
+              "Confirmed",
+              "Likely true positive",
+              "Likely false positive",
+              "Needs human review"
+            ]
+          },
+          "confidence": {"enum": ["High", "Medium", "Low"]},
+          "path": {"type": "string"},
+          "line_start": {"type": ["integer", "null"]},
+          "line_end": {"type": ["integer", "null"]},
+          "message": {"type": "string"},
+          "commits": {"type": "array", "items": {"type": "string"}},
+          "fingerprint": {"type": "string"},
+          "in_baseline": {"type": "boolean"},
+          "repository_ignored": {"type": "boolean"},
+          "evidence": {"type": "array", "items": {"type": "string"}},
+          "impact": {"type": "string"},
+          "remediation": {"type": "string"}
+        }
+      }
+    }
+  }
+}

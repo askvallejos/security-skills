@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/repository-security-audit/run-metadata.schema.json",
+  "title": "Repository Security Audit Run Metadata",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "target",
+    "mode",
+    "scanners",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run_id": {"type": "string"},
+    "target": {"type": "string"},
+    "mode": {"enum": ["full", "quick"]},
+    "scanners": {"type": "object"},
+    "limitations": {"type": "array", "items": {"type": "string"}}
+  }
+}

@@ -1,0 +1,7 @@
+rules:
+  - id: repository-security-audit-test-eval
+    languages:
+      - python
+    message: Dynamic evaluation requires security review.
+    severity: WARNING
+    pattern: eval(...)

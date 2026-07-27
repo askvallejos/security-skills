@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/repository-security-audit/controls.schema.json",
+  "title": "Repository Security Audit Controls",
+  "type": "object",
+  "required": ["schema_version", "profile", "framework", "controls"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "profile": {"enum": ["web", "generic"]},
+    "framework": {"type": "object"},
+    "controls": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "framework",
+          "requirement",
+          "state",
+          "confidence",
+          "evidence",
+          "rationale",
+          "owasp_categories"
+        ],
+        "properties": {
+          "id": {"type": "string"},
+          "framework": {"type": "string"},
+          "requirement": {"type": "string"},
+          "state": {
+            "enum": [
+              "Verified",
+              "Partial",
+              "Missing",
+              "Unknown",
+              "Not applicable"
+            ]
+          },
+          "confidence": {"enum": ["High", "Medium", "Low"]},
+          "evidence": {"type": "array", "items": {"type": "string"}},
+          "rationale": {"type": "string"},
+          "owasp_categories": {
+            "type": "array",
+            "items": {"type": "string", "pattern": "^A(0[1-9]|10)$"}
+          }
+        }
+      }
+    }
+  }
+}

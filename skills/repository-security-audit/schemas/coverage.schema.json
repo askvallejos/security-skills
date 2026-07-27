@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/repository-security-audit/coverage.schema.json",
+  "title": "Repository Security Audit Coverage",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "completion",
+    "disposition",
+    "controls",
+    "files",
+    "findings",
+    "incomplete_scanners"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "completion": {"enum": ["Complete", "Incomplete"]},
+    "disposition": {
+      "enum": ["Pass", "Findings require action", "Undetermined"]
+    },
+    "controls": {
+      "type": "object",
+      "required": [
+        "verified",
+        "partial",
+        "missing",
+        "unknown",
+        "not_applicable",
+        "applicable",
+        "scorable",
+        "verified_control_coverage_percent",
+        "implementation_present_percent",
+        "evidence_completeness_percent"
+      ]
+    },
+    "files": {
+      "type": "object",
+      "required": ["reviewed", "eligible", "manual_review_coverage_percent"]
+    },
+    "findings": {
+      "type": "object",
+      "required": ["total", "actionable", "unresolved"]
+    },
+    "incomplete_scanners": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  }
+}
