@@ -17,6 +17,10 @@
     "target": {"type": "string"},
     "mode": {"enum": ["full", "quick"]},
     "scanners": {"type": "object"},
+    "provisioning": {
+      "type": "object",
+      "description": "Scanner resolution policy and sanitized provisioning attempts."
+    },
     "limitations": {"type": "array", "items": {"type": "string"}}
   }
 }

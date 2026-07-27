@@ -424,6 +424,9 @@ class AuditToolsTests(unittest.TestCase):
                     "gitleaks_config": None,
                     "baseline": None,
                     "timeout": 30,
+                    "provision": "never",
+                    "semgrep_image": audit_tools.SEMGREP_IMAGE,
+                    "gitleaks_image": audit_tools.GITLEAKS_IMAGE,
                     "allow_registry": False,
                     "allow_network": True,
                 },
@@ -458,6 +461,91 @@ class AuditToolsTests(unittest.TestCase):
                 r"\\.security\\-audit",
                 (run_dir / "config" / "gitleaks.toml").read_text(),
             )
+
+    def test_container_runner_uses_read_only_source_and_private_output(self):
+        runner = {
+            "kind": "docker",
+            "executable": "docker",
+            "image": audit_tools.SEMGREP_IMAGE,
+            "tool": "semgrep",
+            "method": "pulled-container",
+        }
+        target = Path("/workspace/repository")
+        run_dir = target / ".security-audit" / "runs" / "test"
+        temporary = Path("/private/tmp/repository-security-audit")
+        command = audit_tools.scanner_command(
+            runner,
+            [
+                "scan",
+                "--config",
+                "rules.yml",
+                "--output",
+                str(temporary / "semgrep.json"),
+                str(target),
+            ],
+            target=target,
+            run_dir=run_dir,
+            temporary_path=temporary,
+            allow_network=False,
+        )
+        self.assertIn("--network=none", command)
+        self.assertIn("type=bind,source=/workspace/repository,target=/src,readonly", command)
+        self.assertIn(
+            "type=bind,source=/private/tmp/repository-security-audit,target=/raw",
+            command,
+        )
+        self.assertIn("/raw/semgrep.json", command)
+        self.assertIn("/src", command)
+        self.assertEqual("semgrep", command[command.index(audit_tools.SEMGREP_IMAGE) + 1])
+
+    def test_container_paths_are_normalized_to_repository_relative_paths(self):
+        raw = {
+            "version": "test",
+            "results": [
+                {
+                    "check_id": "test.rule",
+                    "path": "/src/app.py",
+                    "start": {"line": 1},
+                    "end": {"line": 1},
+                    "extra": {"severity": "ERROR"},
+                }
+            ],
+            "errors": [],
+            "paths": {"scanned": ["/src/app.py"], "skipped": []},
+        }
+        retained, _ = audit_tools.sanitize_semgrep(
+            raw,
+            Path("/host/repository"),
+            (Path("/src"),),
+        )
+        self.assertEqual("app.py", retained["results"][0]["path"])
+        self.assertEqual(["app.py"], retained["paths"]["scanned"])
+
+    def test_missing_scanner_is_provisioned_without_a_global_install(self):
+        attempts = []
+        expected = {
+            "kind": "native",
+            "executable": "/private/tmp/semgrep-venv/bin/semgrep",
+            "method": "isolated-python",
+        }
+        with mock.patch.object(audit_tools, "native_runner", return_value=None), mock.patch.object(
+            audit_tools,
+            "provision_semgrep_native",
+            return_value=dict(expected),
+        ) as provision:
+            runner = audit_tools.resolve_scanner_runner(
+                "semgrep",
+                image=audit_tools.SEMGREP_IMAGE,
+                target=Path("/repo"),
+                provision_root=Path("/private/tmp"),
+                environment={},
+                docker=None,
+                provision="auto",
+                attempts=attempts,
+            )
+        provision.assert_called_once()
+        self.assertEqual("isolated-python", runner["method"])
+        self.assertEqual("semgrep", runner["tool"])
 
     @unittest.skipUnless(shutil.which("gitleaks"), "Gitleaks is not installed")
     def test_current_gitleaks_accepts_effective_exclusion_config(self):

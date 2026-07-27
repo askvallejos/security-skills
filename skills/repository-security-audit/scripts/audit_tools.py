@@ -13,12 +13,17 @@ import datetime as dt
 import hashlib
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
+import urllib.error
+import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -27,6 +32,13 @@ SKILL_ROOT = Path(__file__).resolve().parent.parent
 ASVS_PATH = SKILL_ROOT / "references" / "asvs-5.0.0.flat.json"
 ASVS_SHA256 = "8201b20eec2908c3380ac600c91c8ba746346fbb808859366abb232027532311"
 GENERIC_CONTROLS_PATH = SKILL_ROOT / "references" / "repository-controls.json"
+
+# Fixed versions make an audit repeatable. Update deliberately, after validating
+# the new scanner release, rather than silently tracking a mutable latest tag.
+SEMGREP_VERSION = "1.170.0"
+GITLEAKS_VERSION = "8.30.1"
+SEMGREP_IMAGE = f"semgrep/semgrep:{SEMGREP_VERSION}"
+GITLEAKS_IMAGE = f"ghcr.io/gitleaks/gitleaks:v{GITLEAKS_VERSION}"
 
 TRIAGE_STATUSES = {
     "Confirmed",
@@ -152,13 +164,16 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def relative_path(path: str, target: Path) -> str:
+def relative_path(
+    path: str, target: Path, path_aliases: Sequence[Path] = ()
+) -> str:
     candidate = Path(path)
-    try:
-        if candidate.is_absolute():
-            return candidate.resolve().relative_to(target).as_posix()
-    except (OSError, ValueError):
-        pass
+    if candidate.is_absolute():
+        for root in (target, *path_aliases):
+            try:
+                return candidate.resolve().relative_to(root.resolve()).as_posix()
+            except (OSError, ValueError):
+                continue
     return candidate.as_posix().lstrip("./")
 
 
@@ -265,6 +280,255 @@ def tool_version(
     if result["exit_code"] != 0:
         return "unknown"
     return sanitize_text((stdout or stderr).strip().splitlines()[0])
+
+
+def command_diagnostic(result: Dict[str, Any], stdout: str, stderr: str) -> str:
+    """Return bounded, redacted diagnostics suitable for retained metadata."""
+    outcome = stderr or stdout
+    if result.get("timed_out"):
+        outcome = "Command timed out.\n" + outcome
+    return sanitize_text(outcome)[-4000:]
+
+
+def native_runner(name: str) -> Optional[Dict[str, str]]:
+    executable = shutil.which(name)
+    if not executable:
+        return None
+    return {"kind": "native", "executable": executable, "method": "existing"}
+
+
+def ready_docker(target: Path, environment: Dict[str, str]) -> Optional[Dict[str, str]]:
+    """Return a usable Docker client without treating a CLI on PATH as usable."""
+    docker = shutil.which("docker")
+    if not docker:
+        return None
+    result, stdout, stderr = command_result(
+        [docker, "version", "--format", "{{.Server.Version}}"],
+        cwd=target,
+        timeout=30,
+        env=environment,
+    )
+    if result["exit_code"] != 0 or result["timed_out"]:
+        return None
+    version = sanitize_text((stdout or stderr).strip().splitlines()[0])
+    return {"kind": "docker", "executable": docker, "docker_version": version}
+
+
+def docker_image_runner(
+    name: str,
+    image: str,
+    docker: Dict[str, str],
+    target: Path,
+    environment: Dict[str, str],
+    attempts: List[Dict[str, str]],
+) -> Optional[Dict[str, str]]:
+    """Pull an official fixed image and retain its resolved immutable digest."""
+    executable = docker["executable"]
+    result, stdout, stderr = command_result(
+        [executable, "pull", image],
+        cwd=target,
+        timeout=900,
+        env=environment,
+    )
+    attempts.append(
+        {
+            "method": "docker",
+            "image": image,
+            "status": "succeeded" if result["exit_code"] == 0 and not result["timed_out"] else "failed",
+            "diagnostics": command_diagnostic(result, stdout, stderr),
+        }
+    )
+    if result["exit_code"] != 0 or result["timed_out"]:
+        return None
+    inspect, stdout, stderr = command_result(
+        [
+            executable,
+            "image",
+            "inspect",
+            "--format",
+            "{{index .RepoDigests 0}}",
+            image,
+        ],
+        cwd=target,
+        timeout=30,
+        env=environment,
+    )
+    digest = sanitize_text((stdout or stderr).strip())
+    if inspect["exit_code"] != 0 or not digest or "@sha256:" not in digest:
+        attempts[-1]["digest"] = "unavailable"
+    else:
+        attempts[-1]["digest"] = digest
+    return {
+        "kind": "docker",
+        "executable": executable,
+        "image": image,
+        "image_digest": attempts[-1]["digest"],
+        "method": "pulled-container",
+    }
+
+
+def venv_executable(venv_path: Path, name: str) -> Path:
+    if os.name == "nt":
+        return venv_path / "Scripts" / f"{name}.exe"
+    return venv_path / "bin" / name
+
+
+def provision_semgrep_native(
+    provision_root: Path,
+    target: Path,
+    environment: Dict[str, str],
+    attempts: List[Dict[str, str]],
+) -> Optional[Dict[str, str]]:
+    """Install Semgrep in a disposable, isolated virtual environment."""
+    venv_path = provision_root / "semgrep-venv"
+    install_environment = dict(environment)
+    install_environment.update({"PIP_DISABLE_PIP_VERSION_CHECK": "1", "PIP_NO_INPUT": "1"})
+    create, stdout, stderr = command_result(
+        [sys.executable, "-m", "venv", str(venv_path)],
+        cwd=target,
+        timeout=120,
+        env=install_environment,
+    )
+    if create["exit_code"] != 0 or create["timed_out"]:
+        attempts.append(
+            {
+                "method": "isolated-python",
+                "status": "failed",
+                "diagnostics": command_diagnostic(create, stdout, stderr),
+            }
+        )
+        return None
+    python = venv_executable(venv_path, "python")
+    install, stdout, stderr = command_result(
+        [
+            str(python),
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            f"semgrep=={SEMGREP_VERSION}",
+        ],
+        cwd=target,
+        timeout=900,
+        env=install_environment,
+    )
+    executable = venv_executable(venv_path, "semgrep")
+    success = install["exit_code"] == 0 and not install["timed_out"] and executable.is_file()
+    attempts.append(
+        {
+            "method": "isolated-python",
+            "version": SEMGREP_VERSION,
+            "status": "succeeded" if success else "failed",
+            "diagnostics": command_diagnostic(install, stdout, stderr),
+        }
+    )
+    if not success:
+        return None
+    return {"kind": "native", "executable": str(executable), "method": "isolated-python"}
+
+
+def gitleaks_asset_name() -> str:
+    systems = {"Darwin": "darwin", "Linux": "linux", "Windows": "windows"}
+    architectures = {
+        "x86_64": "x64",
+        "amd64": "x64",
+        "aarch64": "arm64",
+        "arm64": "arm64",
+        "i386": "x32",
+        "i686": "x32",
+    }
+    system = systems.get(platform.system())
+    architecture = architectures.get(platform.machine().lower())
+    if not system or not architecture:
+        raise AuditError(
+            "No verified Gitleaks release asset is configured for "
+            f"{platform.system()} {platform.machine()}."
+        )
+    extension = "zip" if system == "windows" else "tar.gz"
+    return f"gitleaks_{GITLEAKS_VERSION}_{system}_{architecture}.{extension}"
+
+
+def download_official_file(url: str, maximum_bytes: int = 100 * 1024 * 1024) -> bytes:
+    request = urllib.request.Request(url, headers={"User-Agent": "repository-security-audit"})
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            payload = response.read(maximum_bytes + 1)
+    except (urllib.error.URLError, OSError) as error:
+        raise AuditError(f"Cannot download official scanner release: {error}") from error
+    if len(payload) > maximum_bytes:
+        raise AuditError("Official scanner release exceeds the configured size limit")
+    return payload
+
+
+def provision_gitleaks_native(
+    provision_root: Path,
+    attempts: List[Dict[str, str]],
+) -> Optional[Dict[str, str]]:
+    """Download a fixed official release and verify it against its published SHA-256."""
+    try:
+        asset = gitleaks_asset_name()
+        release = f"https://github.com/gitleaks/gitleaks/releases/download/v{GITLEAKS_VERSION}"
+        checksums = download_official_file(f"{release}/gitleaks_{GITLEAKS_VERSION}_checksums.txt")
+        expected = None
+        for line in checksums.decode("utf-8", errors="replace").splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[-1].lstrip("*") == asset:
+                expected = parts[0].lower()
+                break
+        if not expected or not re.fullmatch(r"[0-9a-f]{64}", expected):
+            raise AuditError("Official Gitleaks checksum manifest does not contain the selected asset")
+        payload = download_official_file(f"{release}/{asset}")
+        actual = hashlib.sha256(payload).hexdigest()
+        if actual != expected:
+            raise AuditError("Official Gitleaks release checksum verification failed")
+        archive = provision_root / asset
+        archive.write_bytes(payload)
+        executable_name = "gitleaks.exe" if asset.endswith(".zip") else "gitleaks"
+        executable = provision_root / executable_name
+        if asset.endswith(".zip"):
+            with zipfile.ZipFile(archive) as bundle:
+                member = next(
+                    (item for item in bundle.infolist() if Path(item.filename).name == executable_name),
+                    None,
+                )
+                if member is None:
+                    raise AuditError("Official Gitleaks archive does not contain its executable")
+                with bundle.open(member) as source, executable.open("wb") as destination:
+                    shutil.copyfileobj(source, destination)
+        else:
+            with tarfile.open(archive, "r:gz") as bundle:
+                member = next(
+                    (item for item in bundle.getmembers() if item.isfile() and Path(item.name).name == executable_name),
+                    None,
+                )
+                if member is None:
+                    raise AuditError("Official Gitleaks archive does not contain its executable")
+                source = bundle.extractfile(member)
+                if source is None:
+                    raise AuditError("Cannot extract official Gitleaks executable")
+                with source, executable.open("wb") as destination:
+                    shutil.copyfileobj(source, destination)
+        os.chmod(executable, 0o700)
+    except (AuditError, OSError, tarfile.TarError, zipfile.BadZipFile) as error:
+        attempts.append(
+            {"method": "verified-official-release", "status": "failed", "diagnostics": sanitize_text(error)}
+        )
+        return None
+    attempts.append(
+        {
+            "method": "verified-official-release",
+            "version": GITLEAKS_VERSION,
+            "status": "succeeded",
+            "asset": asset,
+            "sha256": actual,
+            "diagnostics": "",
+        }
+    )
+    return {
+        "kind": "native",
+        "executable": str(executable),
+        "method": "verified-official-release",
+    }
 
 
 def is_binary(path: Path) -> bool:
@@ -416,6 +680,122 @@ def private_environment(temporary_path: Optional[Path] = None) -> Dict[str, str]
     return environment
 
 
+def resolve_scanner_runner(
+    name: str,
+    *,
+    image: str,
+    target: Path,
+    provision_root: Path,
+    environment: Dict[str, str],
+    docker: Optional[Dict[str, str]],
+    provision: str,
+    attempts: List[Dict[str, str]],
+) -> Optional[Dict[str, str]]:
+    """Prefer an existing binary, then a fixed container, then an isolated binary."""
+    existing = native_runner(name)
+    if existing:
+        existing["tool"] = name
+        attempts.append({"method": "existing", "status": "succeeded", "diagnostics": ""})
+        return existing
+    if provision == "never":
+        attempts.append(
+            {
+                "method": "automatic-provisioning",
+                "status": "skipped",
+                "diagnostics": "Provisioning was disabled with --provision never.",
+            }
+        )
+        return None
+    if docker:
+        container = docker_image_runner(name, image, docker, target, environment, attempts)
+        if container:
+            container["tool"] = name
+            return container
+    if name == "semgrep":
+        runner = provision_semgrep_native(provision_root, target, environment, attempts)
+    else:
+        runner = provision_gitleaks_native(provision_root, attempts)
+    if runner:
+        runner["tool"] = name
+    return runner
+
+
+def container_path(value: str, mappings: Sequence[Tuple[Path, str]]) -> str:
+    """Translate a host path passed to a scanner into its container mount path."""
+    for host_path, mounted_path in sorted(
+        mappings, key=lambda item: len(str(item[0])), reverse=True
+    ):
+        try:
+            relative = Path(value).resolve().relative_to(host_path.resolve())
+        except (OSError, ValueError):
+            continue
+        return mounted_path if relative == Path(".") else f"{mounted_path}/{relative.as_posix()}"
+    return value
+
+
+def scanner_command(
+    runner: Dict[str, str],
+    arguments: Sequence[str],
+    *,
+    target: Path,
+    run_dir: Path,
+    temporary_path: Path,
+    allow_network: bool,
+    extra_mounts: Sequence[Tuple[Path, str]] = (),
+) -> List[str]:
+    if runner["kind"] == "native":
+        return [runner["executable"], *arguments]
+
+    command = [runner["executable"], "run", "--rm", "--workdir", "/src"]
+    if not allow_network:
+        command.append("--network=none")
+    if os.name == "posix":
+        command.extend(["--user", f"{os.getuid()}:{os.getgid()}"])
+    mounts: List[Tuple[Path, str, bool]] = [
+        (target, "/src", True),
+        (run_dir, "/audit", True),
+        (temporary_path, "/raw", False),
+    ]
+    mounts.extend((host, mounted, True) for host, mounted in extra_mounts)
+    for host, mounted, read_only in mounts:
+        spec = f"type=bind,source={host},target={mounted}"
+        if read_only:
+            spec += ",readonly"
+        command.extend(["--mount", spec])
+    command.extend(["--env", "SEMGREP_SEND_METRICS=off", runner["image"]])
+    if runner.get("tool") == "semgrep":
+        command.append("semgrep")
+    mappings = [(target, "/src"), (run_dir, "/audit"), (temporary_path, "/raw"), *extra_mounts]
+    command.extend(container_path(argument, mappings) for argument in arguments)
+    return command
+
+
+def runner_version(
+    runner: Dict[str, str],
+    arguments: Sequence[str],
+    target: Path,
+    environment: Dict[str, str],
+) -> str:
+    if runner["kind"] == "native":
+        return tool_version(runner["executable"], arguments, target, env=environment)
+    command = [runner["executable"], "run", "--rm", "--network=none", runner["image"]]
+    if runner.get("tool") == "semgrep":
+        command.append("semgrep")
+    command.extend(arguments)
+    result, stdout, stderr = command_result(command, cwd=target, timeout=60, env=environment)
+    if result["exit_code"] != 0 or result["timed_out"]:
+        return "unknown"
+    return sanitize_text((stdout or stderr).strip().splitlines()[0])
+
+
+def runner_metadata(runner: Dict[str, str]) -> Dict[str, str]:
+    metadata = {"runner": runner["kind"], "provisioning": runner["method"]}
+    if runner["kind"] == "docker":
+        metadata["image"] = runner["image"]
+        metadata["image_digest"] = runner.get("image_digest", "unavailable")
+    return metadata
+
+
 def read_optional_report(path: Path, successful_empty: bool = False) -> Any:
     if path.exists():
         return load_json(path)
@@ -424,7 +804,9 @@ def read_optional_report(path: Path, successful_empty: bool = False) -> Any:
     raise AuditError(f"Expected scanner report was not created: {path}")
 
 
-def sanitize_semgrep(raw: Any, target: Path) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+def sanitize_semgrep(
+    raw: Any, target: Path, path_aliases: Sequence[Path] = ()
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     if not isinstance(raw, dict) or not isinstance(raw.get("results", []), list):
         raise AuditError("Semgrep output has an unexpected JSON shape")
     retained_results: List[Dict[str, Any]] = []
@@ -441,7 +823,7 @@ def sanitize_semgrep(raw: Any, target: Path) -> Tuple[Dict[str, Any], List[Dict[
         }
         rule_id = sanitize_text(result.get("check_id") or "unknown")
         result_path = sanitize_text(
-            relative_path(str(result.get("path") or ""), target)
+            relative_path(str(result.get("path") or ""), target, path_aliases)
         )
         retained = {
             "rule_id": rule_id,
@@ -484,13 +866,13 @@ def sanitize_semgrep(raw: Any, target: Path) -> Tuple[Dict[str, Any], List[Dict[
                 "level": sanitize_text(error.get("level")),
                 "message": "Semgrep reported a scan or parse error; raw details were not retained.",
                 "path": sanitize_text(
-                    relative_path(str(error.get("path") or ""), target)
+                    relative_path(str(error.get("path") or ""), target, path_aliases)
                 ),
             }
         )
     raw_paths = raw.get("paths") if isinstance(raw.get("paths"), dict) else {}
     scanned_paths = [
-        sanitize_text(relative_path(str(path), target))
+        sanitize_text(relative_path(str(path), target, path_aliases))
         for path in raw_paths.get("scanned", [])
         if isinstance(path, str)
     ]
@@ -499,7 +881,7 @@ def sanitize_semgrep(raw: Any, target: Path) -> Tuple[Dict[str, Any], List[Dict[
         if isinstance(skipped, str):
             skipped_paths.append(
                 {
-                    "path": sanitize_text(relative_path(skipped, target)),
+                    "path": sanitize_text(relative_path(skipped, target, path_aliases)),
                     "reason": "Semgrep skipped this path.",
                 }
             )
@@ -507,7 +889,9 @@ def sanitize_semgrep(raw: Any, target: Path) -> Tuple[Dict[str, Any], List[Dict[
             skipped_paths.append(
                 {
                     "path": sanitize_text(
-                        relative_path(str(skipped.get("path") or ""), target)
+                        relative_path(
+                            str(skipped.get("path") or ""), target, path_aliases
+                        )
                     ),
                     "reason": sanitize_text(
                         skipped.get("reason") or "Semgrep skipped this path."
@@ -545,6 +929,7 @@ def sanitize_gitleaks(
     source_name: str,
     baseline_fingerprints: Optional[Set[str]] = None,
     repository_ignored_fingerprints: Optional[Set[str]] = None,
+    path_aliases: Sequence[Path] = (),
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Set[str]]:
     if not isinstance(raw, list):
         raise AuditError(f"{source_name} output has an unexpected JSON shape")
@@ -559,10 +944,15 @@ def sanitize_gitleaks(
         safe = {
             "description": sanitize_text(finding.get("Description"), secrets),
             "path": sanitize_text(
-                relative_path(str(finding.get("File") or ""), target), secrets
+                relative_path(
+                    str(finding.get("File") or ""), target, path_aliases
+                ),
+                secrets,
             ),
             "symlink_path": sanitize_text(
-                relative_path(str(finding.get("SymlinkFile") or ""), target),
+                relative_path(
+                    str(finding.get("SymlinkFile") or ""), target, path_aliases
+                ),
                 secrets,
             ),
             "line_start": finding.get("StartLine"),
@@ -619,7 +1009,9 @@ def severity_from_osv(vulnerability: Dict[str, Any]) -> str:
     return "Unassigned"
 
 
-def sanitize_osv(raw: Any, target: Path) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+def sanitize_osv(
+    raw: Any, target: Path, path_aliases: Sequence[Path] = ()
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     if not isinstance(raw, dict) or not isinstance(raw.get("results", []), list):
         raise AuditError("OSV-Scanner output has an unexpected JSON shape")
     retained_results: List[Dict[str, Any]] = []
@@ -627,7 +1019,7 @@ def sanitize_osv(raw: Any, target: Path) -> Tuple[Dict[str, Any], List[Dict[str,
     for result in raw.get("results", []):
         source = result.get("source") or {}
         source_path = sanitize_text(
-            relative_path(str(source.get("path") or ""), target)
+            relative_path(str(source.get("path") or ""), target, path_aliases)
         )
         packages = []
         for package_entry in result.get("packages", []):
@@ -932,8 +1324,38 @@ def run_scan(args: argparse.Namespace) -> int:
             )
         os.chmod(temporary_path, 0o700)
         environment = private_environment(temporary_path)
+        provision_root = temporary_path / "provisioned"
+        provision_root.mkdir(mode=0o700)
+        docker = ready_docker(target, environment) if args.provision == "auto" else None
+        semgrep_attempts: List[Dict[str, str]] = []
+        gitleaks_attempts: List[Dict[str, str]] = []
+        semgrep = resolve_scanner_runner(
+            "semgrep",
+            image=args.semgrep_image,
+            target=target,
+            provision_root=provision_root,
+            environment=environment,
+            docker=docker,
+            provision=args.provision,
+            attempts=semgrep_attempts,
+        )
+        gitleaks = resolve_scanner_runner(
+            "gitleaks",
+            image=args.gitleaks_image,
+            target=target,
+            provision_root=provision_root,
+            environment=environment,
+            docker=docker,
+            provision=args.provision,
+            attempts=gitleaks_attempts,
+        )
+        metadata["provisioning"] = {
+            "policy": args.provision,
+            "docker": docker or {"status": "unavailable"},
+            "semgrep": semgrep_attempts,
+            "gitleaks": gitleaks_attempts,
+        }
 
-        semgrep = shutil.which("semgrep")
         if not semgrep:
             metadata["scanners"]["semgrep"] = {
                 "status": "unavailable",
@@ -943,23 +1365,34 @@ def run_scan(args: argparse.Namespace) -> int:
         elif registry_config(args.semgrep_config, target) and not args.allow_registry:
             metadata["scanners"]["semgrep"] = {
                 "status": "blocked",
-                "version": tool_version(
-                    semgrep,
-                    ["scan", "--disable-version-check", "--version"],
-                    target,
-                    env=environment,
-                ),
+                "version": runner_version(semgrep, ["--version"], target, environment),
+                **runner_metadata(semgrep),
             }
             metadata["limitations"].append(
                 "Semgrep registry access and project URL disclosure were not authorized."
             )
         else:
             raw_semgrep = temporary_path / "semgrep.json"
-            command = [
+            semgrep_config = args.semgrep_config
+            semgrep_extra_mounts: List[Tuple[Path, str]] = []
+            configured_path = resolve_optional_path(args.semgrep_config, target)
+            if (
+                semgrep["kind"] == "docker"
+                and configured_path
+                and configured_path.exists()
+                and not path_is_within(configured_path, target)
+            ):
+                config_mount_root = (
+                    configured_path if configured_path.is_dir() else configured_path.parent
+                )
+                semgrep_extra_mounts.append((config_mount_root, "/semgrep-config"))
+                semgrep_config = str(configured_path)
+            command = scanner_command(
                 semgrep,
+                [
                 "scan",
                 "--config",
-                args.semgrep_config,
+                semgrep_config,
                 "--metrics=off",
                 "--disable-version-check",
                 "--oss-only",
@@ -969,10 +1402,16 @@ def run_scan(args: argparse.Namespace) -> int:
                 "--json",
                 "--output",
                 str(raw_semgrep),
-            ]
+                ],
+                target=target,
+                run_dir=run_dir,
+                temporary_path=temporary_path,
+                allow_network=registry_config(args.semgrep_config, target) and args.allow_registry,
+                extra_mounts=semgrep_extra_mounts,
+            )
             for excluded in scanner_excludes:
                 command.extend(["--exclude", excluded])
-            command.append(str(target))
+            command.append(container_path(str(target), [(target, "/src")]) if semgrep["kind"] == "docker" else str(target))
             result, stdout, stderr = command_result(
                 command, cwd=target, timeout=args.timeout, env=environment
             )
@@ -981,7 +1420,11 @@ def run_scan(args: argparse.Namespace) -> int:
                 raw = read_optional_report(
                     raw_semgrep, successful_empty=result["exit_code"] == 0
                 )
-                safe_report, normalized = sanitize_semgrep(raw, target)
+                safe_report, normalized = sanitize_semgrep(
+                    raw,
+                    target,
+                    (Path("/src"),) if semgrep["kind"] == "docker" else (),
+                )
                 atomic_write_json(run_dir / "scanner" / "semgrep.json", safe_report)
                 all_findings.extend(normalized)
                 add_scanner_coverage(
@@ -996,12 +1439,8 @@ def run_scan(args: argparse.Namespace) -> int:
                 accepted_finding_exit_codes={0},
                 diagnostics=stderr or stdout,
             )
-            status["version"] = tool_version(
-                semgrep,
-                ["scan", "--disable-version-check", "--version"],
-                target,
-                env=environment,
-            )
+            status["version"] = runner_version(semgrep, ["--version"], target, environment)
+            status.update(runner_metadata(semgrep))
             metadata["scanners"]["semgrep"] = status
             if status["status"] != "completed":
                 metadata["limitations"].append("Semgrep did not complete successfully.")
@@ -1010,7 +1449,6 @@ def run_scan(args: argparse.Namespace) -> int:
                     "Semgrep reported parse or scan errors; affected paths require review."
                 )
 
-        gitleaks = shutil.which("gitleaks")
         if not gitleaks:
             metadata["scanners"]["gitleaks_dir"] = {
                 "status": "unavailable",
@@ -1023,9 +1461,7 @@ def run_scan(args: argparse.Namespace) -> int:
                 }
             metadata["limitations"].append("Gitleaks is unavailable.")
         else:
-            gitleaks_version = tool_version(
-                gitleaks, ["version"], target, env=environment
-            )
+            gitleaks_version = runner_version(gitleaks, ["version"], target, environment)
             scans = [("gitleaks_dir", "dir")]
             git_available = (target / ".git").exists() or subprocess.run(
                 ["git", "-C", str(target), "rev-parse", "--is-inside-work-tree"],
@@ -1046,8 +1482,9 @@ def run_scan(args: argparse.Namespace) -> int:
 
             for scanner_name, subcommand in scans:
                 raw_gitleaks = temporary_path / f"{scanner_name}.json"
-                command = [
+                command = scanner_command(
                     gitleaks,
+                    [
                     subcommand,
                     str(target),
                     "--config",
@@ -1064,7 +1501,12 @@ def run_scan(args: argparse.Namespace) -> int:
                     "--no-banner",
                     "--no-color",
                     "--ignore-gitleaks-allow",
-                ]
+                    ],
+                    target=target,
+                    run_dir=run_dir,
+                    temporary_path=temporary_path,
+                    allow_network=False,
+                )
                 result, stdout, stderr = command_result(
                     command, cwd=target, timeout=args.timeout + 30, env=environment
                 )
@@ -1079,6 +1521,9 @@ def run_scan(args: argparse.Namespace) -> int:
                         scanner_name,
                         baseline_fingerprints=baseline_fingerprints,
                         repository_ignored_fingerprints=repository_ignored_fingerprints,
+                        path_aliases=(Path("/src"),)
+                        if gitleaks["kind"] == "docker"
+                        else (),
                     )
                     known_secrets.update(secrets)
                     atomic_write_json(
@@ -1095,6 +1540,7 @@ def run_scan(args: argparse.Namespace) -> int:
                     diagnostics=sanitize_text(stderr or stdout, known_secrets),
                 )
                 status["version"] = gitleaks_version
+                status.update(runner_metadata(gitleaks))
                 metadata["scanners"][scanner_name] = status
                 if status["status"] != "completed":
                     metadata["limitations"].append(
@@ -1543,9 +1989,30 @@ def find_forbidden_data(value: Any, path: str = "$") -> List[str]:
     return problems
 
 
+def gitleaks_verification_runner(run_dir: Path) -> Optional[Dict[str, str]]:
+    native = native_runner("gitleaks")
+    if native:
+        native["tool"] = "gitleaks"
+        return native
+    metadata = load_json(run_dir / "run-metadata.json")
+    scanner = (metadata.get("scanners") or {}).get("gitleaks_dir") or {}
+    if scanner.get("runner") != "docker" or not scanner.get("image"):
+        return None
+    docker = shutil.which("docker")
+    if not docker:
+        return None
+    return {
+        "kind": "docker",
+        "executable": docker,
+        "image": str(scanner["image"]),
+        "tool": "gitleaks",
+        "method": "recorded-container",
+    }
+
+
 def gitleaks_verify_retained_artifacts(run_dir: Path) -> None:
-    gitleaks = shutil.which("gitleaks")
-    if not gitleaks:
+    runner = gitleaks_verification_runner(run_dir)
+    if not runner:
         return
     with tempfile.TemporaryDirectory(
         prefix="repository-security-audit-verify-"
@@ -1562,8 +2029,9 @@ def gitleaks_verify_retained_artifacts(run_dir: Path) -> None:
             'title = "Audit artifact verification"\n\n[extend]\nuseDefault = true\n',
         )
         atomic_write_text(ignore, "")
-        command = [
-            gitleaks,
+        command = scanner_command(
+            runner,
+            [
             "dir",
             str(run_dir),
             "--config",
@@ -1580,7 +2048,12 @@ def gitleaks_verify_retained_artifacts(run_dir: Path) -> None:
             "--no-banner",
             "--no-color",
             "--ignore-gitleaks-allow",
-        ]
+            ],
+            target=run_dir,
+            run_dir=run_dir,
+            temporary_path=temporary_path,
+            allow_network=False,
+        )
         result, _, _ = command_result(
             command,
             cwd=run_dir,
@@ -1597,7 +2070,11 @@ def gitleaks_verify_retained_artifacts(run_dir: Path) -> None:
         if findings:
             locations = sorted(
                 {
-                    relative_path(str(item.get("File") or ""), run_dir)
+                    relative_path(
+                        str(item.get("File") or ""),
+                        run_dir,
+                        (Path("/src"),) if runner["kind"] == "docker" else (),
+                    )
                     for item in findings
                     if isinstance(item, dict)
                 }
@@ -1672,6 +2149,22 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--gitleaks-config")
     scan.add_argument("--baseline")
     scan.add_argument("--timeout", type=int, default=900)
+    scan.add_argument(
+        "--provision",
+        choices=("auto", "never"),
+        default="auto",
+        help="Automatically provision missing scanners (default: auto)",
+    )
+    scan.add_argument(
+        "--semgrep-image",
+        default=SEMGREP_IMAGE,
+        help="Fixed official Semgrep container image to use when Docker is available",
+    )
+    scan.add_argument(
+        "--gitleaks-image",
+        default=GITLEAKS_IMAGE,
+        help="Fixed official Gitleaks container image to use when Docker is available",
+    )
     scan.add_argument(
         "--allow-registry",
         action="store_true",

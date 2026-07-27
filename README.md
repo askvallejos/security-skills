@@ -46,7 +46,7 @@ Examples:
 ```text
 Use repository-security-audit to run a quick scan of ./services/api.
 Use repository-security-audit to audit this repository and write docs/SECURITY_AUDIT.md.
-Use repository-security-audit without installing missing scanners.
+Use repository-security-audit with --provision never to use only preinstalled scanners.
 ```
 
 Agents that recognize `$skill-name` syntax can also invoke `$repository-security-audit`.
@@ -55,7 +55,11 @@ The default report is `SECURITY_AUDIT.md`; redacted scanner artifacts are stored
 
 ## Requirements
 
-The skill can locate or install Semgrep and Gitleaks using supported user-scoped methods. Package installation and network access remain subject to the host's approval controls.
+Missing Semgrep and Gitleaks scanners are provisioned automatically. The skill
+reuses native binaries, otherwise pulls fixed official Docker images, and falls
+back to temporary verified native tools when Docker is unavailable. It never
+installs Docker, uses `sudo`, or changes a system package database. Semgrep
+registry access and OSV vulnerability lookups remain separate network choices.
 
 ## Repository layout
 
@@ -65,8 +69,9 @@ security-skills/
 └── skills/
     └── repository-security-audit/
         ├── SKILL.md
-        └── references/
-            └── reporting-and-triage.md
+        ├── scripts/audit_tools.py
+        ├── references/
+        └── schemas/
 ```
 
 ## Safety principles
