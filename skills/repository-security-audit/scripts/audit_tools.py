@@ -1171,6 +1171,51 @@ def resolve_optional_path(value: Optional[str], target: Path) -> Optional[Path]:
     return path.resolve()
 
 
+def ensure_git_exclude(target: Path, artifact_root: Path) -> None:
+    """Automatically exclude artifact_root in target repo's local .git/info/exclude without modifying tracked project files."""
+    try:
+        rel_artifact = artifact_root.relative_to(target)
+    except ValueError:
+        return
+
+    pattern = f"/{rel_artifact.as_posix()}/"
+    git_ref = target / ".git"
+    if not git_ref.exists():
+        return
+
+    git_dir = git_ref
+    if git_ref.is_file():
+        try:
+            content = git_ref.read_text(encoding="utf-8").strip()
+            if content.startswith("gitdir:"):
+                git_dir_path = Path(content.split("gitdir:", 1)[1].strip())
+                if not git_dir_path.is_absolute():
+                    git_dir_path = (target / git_dir_path).resolve()
+                git_dir = git_dir_path
+        except Exception:
+            return
+
+    info_dir = git_dir / "info"
+    exclude_file = info_dir / "exclude"
+
+    try:
+        info_dir.mkdir(parents=True, exist_ok=True)
+        existing = ""
+        if exclude_file.exists():
+            existing = exclude_file.read_text(encoding="utf-8")
+            norm_pattern = pattern.strip("/")
+            for line in existing.splitlines():
+                clean_line = line.strip().strip("/")
+                if clean_line == norm_pattern:
+                    return
+
+        prefix = "\n" if existing and not existing.endswith("\n") else ""
+        new_content = existing + prefix + f"{pattern}\n"
+        atomic_write_text(exclude_file, new_content)
+    except Exception:
+        pass
+
+
 def registry_config(config: str, target: Path) -> bool:
     local = resolve_optional_path(config, target)
     if local and local.exists():
@@ -1219,7 +1264,8 @@ def run_scan(args: argparse.Namespace) -> int:
         os.chmod(artifact_root, 0o700)
     artifact_ignore = artifact_root / ".gitignore"
     if not artifact_ignore.exists():
-        atomic_write_text(artifact_ignore, "*\n")
+        atomic_write_text(artifact_ignore, "*\n.*\n")
+    ensure_git_exclude(target, artifact_root)
 
     run_id = args.run_id or utc_run_id()
     run_dir = artifact_root / "runs" / run_id

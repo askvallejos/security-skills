@@ -142,6 +142,8 @@ AUDIT_ROOT/
 
 The history report is optional in quick mode or outside Git. Preserve an existing final report by renaming it with a timestamp or choosing a timestamped output path.
 
+The helper writes a `.gitignore` (ignoring all files and dotfiles) inside `AUDIT_ROOT` and automatically adds `AUDIT_ROOT` to the target repository's local `.git/info/exclude` (if inside a Git tree) so that audit artifacts are ignored locally without modifying tracked project files.
+
 The helper excludes only its own artifacts, Git internals, generated or
 dependency directories, and escaping symlinks. It does not modify repository
 scanner configuration or ignore files. Existing Gitleaks baselines and

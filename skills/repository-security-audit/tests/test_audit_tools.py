@@ -617,5 +617,27 @@ class AuditToolsTests(unittest.TestCase):
                 audit_tools.run_scan(arguments)
 
 
+    def test_ensure_git_exclude_adds_pattern_and_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            git_dir = target / ".git"
+            git_dir.mkdir()
+            artifact_root = target / ".security-audit"
+
+            # Run first time
+            audit_tools.ensure_git_exclude(target, artifact_root)
+            exclude_file = git_dir / "info" / "exclude"
+            self.assertTrue(exclude_file.exists())
+            content = exclude_file.read_text(encoding="utf-8")
+            self.assertIn("/.security-audit/\n", content)
+
+            # Run second time (idempotent)
+            audit_tools.ensure_git_exclude(target, artifact_root)
+            content_second = exclude_file.read_text(encoding="utf-8")
+            self.assertEqual(content.count("/.security-audit/"), 1)
+            self.assertEqual(content, content_second)
+
+
 if __name__ == "__main__":
     unittest.main()
+
