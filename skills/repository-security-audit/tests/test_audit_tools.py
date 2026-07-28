@@ -734,7 +734,7 @@ class AuditToolsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
             base_config = tmppath / ".gitleaks.toml"
-            base_config.write_text("[allowlist]\ndescription = 'legacy'\n")
+            base_config.write_text("[allowlist] # legacy allowlist\ndescription = 'legacy'\n[allowlist.paths]\n")
             run_dir = tmppath / "run"
             (run_dir / "config").mkdir(parents=True)
             result = audit_tools.build_gitleaks_config(
@@ -742,7 +742,8 @@ class AuditToolsTests(unittest.TestCase):
             )
             content = result.read_text()
             self.assertIn("[[allowlists]]", content)
-            self.assertNotIn("[allowlist]\n", content)
+            self.assertNotIn("[allowlist]", content)
+
 
     def test_resolve_scanner_runner_dispatches_correct_provisioner(self):
         with tempfile.TemporaryDirectory() as tmpdir:

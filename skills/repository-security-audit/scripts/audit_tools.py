@@ -38,7 +38,7 @@ GENERIC_CONTROLS_PATH = SKILL_ROOT / "references" / "repository-controls.json"
 SEMGREP_VERSION = "1.170.0"
 GITLEAKS_VERSION = "8.30.1"
 OSV_SCANNER_VERSION = "1.9.2"
-TRIVY_VERSION = "0.59.1"
+TRIVY_VERSION = "0.72.0"
 SEMGREP_IMAGE = f"semgrep/semgrep:{SEMGREP_VERSION}"
 GITLEAKS_IMAGE = f"ghcr.io/gitleaks/gitleaks:v{GITLEAKS_VERSION}"
 OSV_SCANNER_IMAGE = f"ghcr.io/google/osv-scanner:v{OSV_SCANNER_VERSION}"
@@ -636,7 +636,7 @@ def provision_trivy_native(
     """Download official Trivy release archive and verify checksum if available."""
     try:
         asset = trivy_asset_name()
-        release = f"https://github.com/aquasec/trivy/releases/download/v{TRIVY_VERSION}"
+        release = f"https://github.com/aquasecurity/trivy/releases/download/v{TRIVY_VERSION}"
         expected = None
         for checksum_file in (
             f"trivy_{TRIVY_VERSION}_checksums.txt",
@@ -812,7 +812,8 @@ def build_gitleaks_config(
             base = base_config.read_text(encoding="utf-8")
         except OSError as error:
             raise AuditError(f"Cannot read Gitleaks config {base_config}: {error}") from error
-        base = re.sub(r"(?m)^\[allowlist\]", "[[allowlists]]", base)
+        base = re.sub(r"(?m)^\[\s*allowlist\s*\](?:\s*#.*)?$", "[[allowlists]]", base)
+        base = re.sub(r"(?m)^\[\s*allowlist\.(paths|regexes|stopwords|commits)\s*\](?:\s*#.*)?$", "", base)
     else:
         base = 'title = "Repository Security Audit"\n\n[extend]\nuseDefault = true\n'
 
