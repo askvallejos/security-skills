@@ -1,3 +1,4 @@
+import argparse
 import importlib.util
 import json
 import shutil
@@ -729,8 +730,48 @@ class AuditToolsTests(unittest.TestCase):
         deduped = audit_tools.deduplicate_findings(normalized)
         self.assertEqual("TRV-001", deduped[0]["id"])
 
+    def test_gitleaks_config_migrates_deprecated_allowlist_syntax(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            base_config = tmppath / ".gitleaks.toml"
+            base_config.write_text("[allowlist]\ndescription = 'legacy'\n")
+            run_dir = tmppath / "run"
+            (run_dir / "config").mkdir(parents=True)
+            result = audit_tools.build_gitleaks_config(
+                tmppath, run_dir, base_config, ["secret.txt"]
+            )
+            content = result.read_text()
+            self.assertIn("[[allowlists]]", content)
+            self.assertNotIn("[allowlist]\n", content)
+
+    def test_resolve_scanner_runner_dispatches_correct_provisioner(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            attempts = []
+            with mock.patch.object(audit_tools, "native_runner", return_value=None):
+                runner_unknown = audit_tools.resolve_scanner_runner(
+                    "unknown_tool",
+                    image="img",
+                    target=tmppath,
+                    provision_root=tmppath,
+                    environment={},
+                    docker=None,
+                    provision="auto",
+                    attempts=attempts,
+                )
+                self.assertIsNone(runner_unknown)
+
+    def test_semgrep_config_default_is_p_default(self):
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers(dest="command")
+        scan = subparsers.add_parser("scan")
+        scan.add_argument("--semgrep-config", default="p/default")
+        args = parser.parse_args(["scan"])
+        self.assertEqual("p/default", args.semgrep_config)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 

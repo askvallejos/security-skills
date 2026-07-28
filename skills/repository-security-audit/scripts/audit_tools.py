@@ -535,6 +535,181 @@ def provision_gitleaks_native(
     }
 
 
+def osv_scanner_asset_name() -> str:
+    systems = {"Darwin": "darwin", "Linux": "linux", "Windows": "windows"}
+    architectures = {
+        "x86_64": "amd64",
+        "amd64": "amd64",
+        "aarch64": "arm64",
+        "arm64": "arm64",
+    }
+    system = systems.get(platform.system())
+    architecture = architectures.get(platform.machine().lower())
+    if not system or not architecture:
+        raise AuditError(
+            "No verified OSV-Scanner release asset is configured for "
+            f"{platform.system()} {platform.machine()}."
+        )
+    extension = ".exe" if system == "windows" else ""
+    return f"osv-scanner_{system}_{architecture}{extension}"
+
+
+def provision_osv_scanner_native(
+    provision_root: Path,
+    attempts: List[Dict[str, str]],
+) -> Optional[Dict[str, str]]:
+    """Download official OSV-Scanner release binary and verify checksum if available."""
+    try:
+        asset = osv_scanner_asset_name()
+        release = f"https://github.com/google/osv-scanner/releases/download/v{OSV_SCANNER_VERSION}"
+        expected = None
+        for checksum_file in (
+            f"osv-scanner_{OSV_SCANNER_VERSION}_checksums.txt",
+            "osv-scanner_checksums.txt",
+            "checksums.txt",
+        ):
+            try:
+                checksums = download_official_file(f"{release}/{checksum_file}")
+                for line in checksums.decode("utf-8", errors="replace").splitlines():
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[-1].lstrip("*").endswith(asset):
+                        expected = parts[0].lower()
+                        break
+                if expected:
+                    break
+            except Exception:
+                continue
+
+        payload = download_official_file(f"{release}/{asset}")
+        actual = hashlib.sha256(payload).hexdigest()
+        if expected and actual != expected:
+            raise AuditError("Official OSV-Scanner release checksum verification failed")
+        executable_name = "osv-scanner.exe" if asset.endswith(".exe") else "osv-scanner"
+        executable = provision_root / executable_name
+        executable.write_bytes(payload)
+        os.chmod(executable, 0o700)
+    except (AuditError, OSError) as error:
+        attempts.append(
+            {"method": "verified-official-release", "status": "failed", "diagnostics": sanitize_text(error)}
+        )
+        return None
+    attempts.append(
+        {
+            "method": "verified-official-release",
+            "version": OSV_SCANNER_VERSION,
+            "status": "succeeded",
+            "asset": asset,
+            "sha256": actual,
+            "diagnostics": "",
+        }
+    )
+    return {
+        "kind": "native",
+        "executable": str(executable),
+        "method": "verified-official-release",
+    }
+
+
+def trivy_asset_name() -> str:
+    systems = {"Darwin": "macOS", "Linux": "Linux", "Windows": "windows"}
+    architectures = {
+        "x86_64": "64bit",
+        "amd64": "64bit",
+        "aarch64": "ARM64",
+        "arm64": "ARM64",
+    }
+    system = systems.get(platform.system())
+    architecture = architectures.get(platform.machine().lower())
+    if not system or not architecture:
+        raise AuditError(
+            "No verified Trivy release asset is configured for "
+            f"{platform.system()} {platform.machine()}."
+        )
+    extension = "zip" if system == "windows" else "tar.gz"
+    return f"trivy_{TRIVY_VERSION}_{system}-{architecture}.{extension}"
+
+
+def provision_trivy_native(
+    provision_root: Path,
+    attempts: List[Dict[str, str]],
+) -> Optional[Dict[str, str]]:
+    """Download official Trivy release archive and verify checksum if available."""
+    try:
+        asset = trivy_asset_name()
+        release = f"https://github.com/aquasec/trivy/releases/download/v{TRIVY_VERSION}"
+        expected = None
+        for checksum_file in (
+            f"trivy_{TRIVY_VERSION}_checksums.txt",
+            "trivy_checksums.txt",
+            "checksums.txt",
+        ):
+            try:
+                checksums = download_official_file(f"{release}/{checksum_file}")
+                for line in checksums.decode("utf-8", errors="replace").splitlines():
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[-1].lstrip("*").endswith(asset):
+                        expected = parts[0].lower()
+                        break
+                if expected:
+                    break
+            except Exception:
+                continue
+
+        payload = download_official_file(f"{release}/{asset}")
+        actual = hashlib.sha256(payload).hexdigest()
+        if expected and actual != expected:
+            raise AuditError("Official Trivy release checksum verification failed")
+        archive = provision_root / asset
+        archive.write_bytes(payload)
+        executable_name = "trivy.exe" if asset.endswith(".zip") else "trivy"
+        executable = provision_root / executable_name
+        if asset.endswith(".zip"):
+            with zipfile.ZipFile(archive) as bundle:
+                member = next(
+                    (item for item in bundle.infolist() if Path(item.filename).name == executable_name),
+                    None,
+                )
+                if member is None:
+                    raise AuditError("Official Trivy archive does not contain its executable")
+                with bundle.open(member) as source, executable.open("wb") as destination:
+                    shutil.copyfileobj(source, destination)
+        else:
+            with tarfile.open(archive, "r:gz") as bundle:
+                member = next(
+                    (item for item in bundle.getmembers() if item.isfile() and Path(item.name).name == executable_name),
+                    None,
+                )
+                if member is None:
+                    raise AuditError("Official Trivy archive does not contain its executable")
+                source = bundle.extractfile(member)
+                if source is None:
+                    raise AuditError("Cannot extract official Trivy executable")
+                with source, executable.open("wb") as destination:
+                    shutil.copyfileobj(source, destination)
+        os.chmod(executable, 0o700)
+    except (AuditError, OSError, tarfile.TarError, zipfile.BadZipFile) as error:
+        attempts.append(
+            {"method": "verified-official-release", "status": "failed", "diagnostics": sanitize_text(error)}
+        )
+        return None
+    attempts.append(
+        {
+            "method": "verified-official-release",
+            "version": TRIVY_VERSION,
+            "status": "succeeded",
+            "asset": asset,
+            "sha256": actual,
+            "diagnostics": "",
+        }
+    )
+    return {
+        "kind": "native",
+        "executable": str(executable),
+        "method": "verified-official-release",
+    }
+
+
+
 def is_binary(path: Path) -> bool:
     try:
         with path.open("rb") as handle:
@@ -637,6 +812,7 @@ def build_gitleaks_config(
             base = base_config.read_text(encoding="utf-8")
         except OSError as error:
             raise AuditError(f"Cannot read Gitleaks config {base_config}: {error}") from error
+        base = re.sub(r"(?m)^\[allowlist\]", "[[allowlists]]", base)
     else:
         base = 'title = "Repository Security Audit"\n\n[extend]\nuseDefault = true\n'
 
@@ -717,8 +893,14 @@ def resolve_scanner_runner(
             return container
     if name == "semgrep":
         runner = provision_semgrep_native(provision_root, target, environment, attempts)
-    else:
+    elif name == "gitleaks":
         runner = provision_gitleaks_native(provision_root, attempts)
+    elif name == "osv-scanner":
+        runner = provision_osv_scanner_native(provision_root, attempts)
+    elif name == "trivy":
+        runner = provision_trivy_native(provision_root, attempts)
+    else:
+        runner = None
     if runner:
         runner["tool"] = name
     return runner
@@ -1509,7 +1691,7 @@ def run_scan(args: argparse.Namespace) -> int:
             )
         else:
             raw_semgrep = temporary_path / "semgrep.json"
-            semgrep_config = args.semgrep_config
+            semgrep_config = "p/default" if args.semgrep_config == "auto" else args.semgrep_config
             semgrep_extra_mounts: List[Tuple[Path, str]] = []
             configured_path = resolve_optional_path(args.semgrep_config, target)
             if (
@@ -2378,7 +2560,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--artifact-root")
     scan.add_argument("--run-id")
     scan.add_argument("--mode", choices=("full", "quick"), default="full")
-    scan.add_argument("--semgrep-config", default="auto")
+    scan.add_argument("--semgrep-config", default="p/default")
     scan.add_argument("--gitleaks-config")
     scan.add_argument("--baseline")
     scan.add_argument("--timeout", type=int, default=900)
