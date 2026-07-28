@@ -410,6 +410,20 @@ class AuditToolsTests(unittest.TestCase):
                         rendered_output,
                         "",
                     )
+                if command[0].endswith("trivy"):
+                    output = {"Results": []}
+                    output_file = Path(command[command.index("--output") + 1])
+                    output_file.write_text(json.dumps(output))
+                    return (
+                        {
+                            "command": list(command),
+                            "duration_seconds": 0.1,
+                            "exit_code": 0,
+                            "timed_out": False,
+                        },
+                        "",
+                        "",
+                    )
                 self.fail(f"Unexpected command: {command}")
 
             arguments = type(
@@ -638,6 +652,85 @@ class AuditToolsTests(unittest.TestCase):
             self.assertEqual(content, content_second)
 
 
+    def test_osv_sanitization_and_normalization(self):
+        raw = {
+            "results": [
+                {
+                    "source": {
+                        "path": "/repo/package-lock.json",
+                        "type": "lockfile",
+                    },
+                    "packages": [
+                        {
+                            "package": {
+                                "name": "lodash",
+                                "version": "4.17.15",
+                                "ecosystem": "npm",
+                            },
+                            "vulnerabilities": [
+                                {
+                                    "id": "GHSA-35jh-r3h4-6jhm",
+                                    "summary": "Prototype Pollution in lodash",
+                                    "database_specific": {
+                                        "severity": "HIGH",
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+        retained, normalized = audit_tools.sanitize_osv(raw, Path("/repo"))
+        self.assertEqual(1, len(retained["results"]))
+        self.assertEqual(1, len(normalized))
+        finding = normalized[0]
+        self.assertEqual("OSV-Scanner", finding["source"])
+        self.assertEqual("GHSA-35jh-r3h4-6jhm", finding["rule_id"])
+        self.assertEqual("High", finding["report_severity"])
+        self.assertEqual("package-lock.json", finding["path"])
+
+        deduped = audit_tools.deduplicate_findings(normalized)
+        self.assertEqual("OSV-001", deduped[0]["id"])
+
+    def test_trivy_sanitization_and_normalization(self):
+        raw = {
+            "Results": [
+                {
+                    "Target": "/repo/Dockerfile",
+                    "Class": "config",
+                    "Type": "dockerfile",
+                    "Misconfigurations": [
+                        {
+                            "ID": "DS002",
+                            "AVDID": "AVD-DS-0002",
+                            "Title": "Image user should not be root",
+                            "Description": "Running containers as root user opens capability risks.",
+                            "Severity": "HIGH",
+                            "Resolution": "Add 'USER appuser' to Dockerfile",
+                            "CauseMetadata": {
+                                "StartLine": 1,
+                                "EndLine": 1,
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+        retained, normalized = audit_tools.sanitize_trivy(raw, Path("/repo"))
+        self.assertEqual(1, len(retained["results"]))
+        self.assertEqual(1, len(normalized))
+        finding = normalized[0]
+        self.assertEqual("Trivy", finding["source"])
+        self.assertEqual("AVD-DS-0002", finding["rule_id"])
+        self.assertEqual("High", finding["report_severity"])
+        self.assertEqual("Dockerfile", finding["path"])
+
+        deduped = audit_tools.deduplicate_findings(normalized)
+        self.assertEqual("TRV-001", deduped[0]["id"])
+
+
 if __name__ == "__main__":
     unittest.main()
+
 

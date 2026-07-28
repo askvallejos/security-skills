@@ -9,6 +9,8 @@ Perform a repository-aware security review with:
 
 - Semgrep for static application security testing.
 - Gitleaks for credential and secret detection.
+- OSV-Scanner for Software Composition Analysis (SCA) and open-source dependency vulnerabilities.
+- Trivy for Infrastructure as Code (IaC) and container misconfiguration security.
 - Manual review of executable code, configuration, infrastructure, tests, trust
   boundaries, and security architecture.
 - OWASP Top 10:2025 and OWASP ASVS 5.0.0 coverage and capability-gap analysis.
@@ -105,9 +107,9 @@ Stop with a clear error for an invalid target. Record material omissions and unr
 Run the bundled helper; do not assemble ad-hoc install commands. Its default
 `--provision auto` resolution order is:
 
-1. Reuse a working native `semgrep` or `gitleaks` binary.
-2. Pull and run the fixed official image: `semgrep/semgrep:1.170.0` or
-   `ghcr.io/gitleaks/gitleaks:v8.30.1`.
+1. Reuse a working native `semgrep`, `gitleaks`, `osv-scanner`, or `trivy` binary.
+2. Pull and run the fixed official image: `semgrep/semgrep:1.170.0`,
+   `ghcr.io/gitleaks/gitleaks:v8.30.1`, `ghcr.io/google/osv-scanner:v1.9.2`, or `aquasec/trivy:0.59.1`.
 3. When Docker is unavailable or the image pull fails, provision Semgrep in an
    isolated temporary Python environment and Gitleaks from its fixed official
    release after SHA-256 verification.

@@ -37,8 +37,12 @@ GENERIC_CONTROLS_PATH = SKILL_ROOT / "references" / "repository-controls.json"
 # the new scanner release, rather than silently tracking a mutable latest tag.
 SEMGREP_VERSION = "1.170.0"
 GITLEAKS_VERSION = "8.30.1"
+OSV_SCANNER_VERSION = "1.9.2"
+TRIVY_VERSION = "0.59.1"
 SEMGREP_IMAGE = f"semgrep/semgrep:{SEMGREP_VERSION}"
 GITLEAKS_IMAGE = f"ghcr.io/gitleaks/gitleaks:v{GITLEAKS_VERSION}"
+OSV_SCANNER_IMAGE = f"ghcr.io/google/osv-scanner:v{OSV_SCANNER_VERSION}"
+TRIVY_IMAGE = f"aquasec/trivy:{TRIVY_VERSION}"
 
 TRIAGE_STATUSES = {
     "Confirmed",
@@ -1084,6 +1088,87 @@ def sanitize_osv(
     return {"results": retained_results}, normalized
 
 
+def sanitize_trivy(
+    raw: Any, target: Path, path_aliases: Sequence[Path] = ()
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    if not isinstance(raw, dict):
+        raw = {}
+    results = raw.get("Results") or []
+    if not isinstance(results, list):
+        results = []
+
+    retained_results: List[Dict[str, Any]] = []
+    normalized: List[Dict[str, Any]] = []
+
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        raw_target = item.get("Target") or ""
+        clean_path = sanitize_text(relative_path(str(raw_target), target, path_aliases))
+        misconfigs = item.get("Misconfigurations") or []
+        if not isinstance(misconfigs, list):
+            continue
+
+        for misconfig in misconfigs:
+            if not isinstance(misconfig, dict):
+                continue
+            rule_id = sanitize_text(str(misconfig.get("AVDID") or misconfig.get("ID") or "unknown"))
+            title = sanitize_text(str(misconfig.get("Title") or misconfig.get("Description") or "IaC misconfiguration"))
+            resolution = sanitize_text(str(misconfig.get("Resolution") or ""))
+            raw_severity = str(misconfig.get("Severity") or "MEDIUM").upper()
+
+            cause = misconfig.get("CauseMetadata") or {}
+            line_start = cause.get("StartLine") or 1
+            line_end = cause.get("EndLine") or line_start
+
+            if "CRITICAL" in raw_severity:
+                report_severity = "Critical"
+            elif "HIGH" in raw_severity:
+                report_severity = "High"
+            elif "LOW" in raw_severity:
+                report_severity = "Low"
+            else:
+                report_severity = "Medium"
+
+            fp_raw = f"Trivy:{clean_path}:{line_start}:{rule_id}"
+            fingerprint = hashlib.sha256(fp_raw.encode("utf-8")).hexdigest()
+
+            retained_results.append(
+                {
+                    "rule_id": rule_id,
+                    "target": clean_path,
+                    "title": title,
+                    "severity": raw_severity,
+                    "resolution": resolution,
+                    "line_start": line_start,
+                    "line_end": line_end,
+                    "fingerprint": fingerprint,
+                }
+            )
+
+            normalized.append(
+                {
+                    "source": "Trivy",
+                    "rule_id": rule_id,
+                    "scanner_severity": raw_severity,
+                    "report_severity": report_severity,
+                    "triage_status": "Needs human review",
+                    "confidence": "High",
+                    "path": clean_path,
+                    "line_start": line_start,
+                    "line_end": line_end,
+                    "message": f"Trivy rule {rule_id}: {title} in {clean_path}",
+                    "commits": [],
+                    "fingerprint": fingerprint,
+                    "evidence": [f"Rule: {rule_id}", f"Title: {title}"],
+                    "impact": title,
+                    "remediation": resolution or f"Remediate {rule_id} misconfiguration in {clean_path}.",
+                }
+            )
+
+    return {"results": retained_results}, normalized
+
+
 def deduplicate_findings(findings: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     groups: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
     for finding in findings:
@@ -1122,12 +1207,13 @@ def deduplicate_findings(findings: Sequence[Dict[str, Any]]) -> List[Dict[str, A
             item.get("fingerprint", ""),
         ),
     )
-    counters = {"Gitleaks": 0, "Manual": 0, "OSV-Scanner": 0, "Semgrep": 0}
+    counters = {"Gitleaks": 0, "Manual": 0, "OSV-Scanner": 0, "Semgrep": 0, "Trivy": 0}
     prefixes = {
         "Gitleaks": "GL",
         "Manual": "MAN",
         "OSV-Scanner": "OSV",
         "Semgrep": "SG",
+        "Trivy": "TRV",
     }
     for finding in ordered:
         counters[finding["source"]] += 1
@@ -1375,6 +1461,8 @@ def run_scan(args: argparse.Namespace) -> int:
         docker = ready_docker(target, environment) if args.provision == "auto" else None
         semgrep_attempts: List[Dict[str, str]] = []
         gitleaks_attempts: List[Dict[str, str]] = []
+        osv_attempts: List[Dict[str, str]] = []
+        trivy_attempts: List[Dict[str, str]] = []
         semgrep = resolve_scanner_runner(
             "semgrep",
             image=args.semgrep_image,
@@ -1400,6 +1488,8 @@ def run_scan(args: argparse.Namespace) -> int:
             "docker": docker or {"status": "unavailable"},
             "semgrep": semgrep_attempts,
             "gitleaks": gitleaks_attempts,
+            "osv-scanner": osv_attempts,
+            "trivy": trivy_attempts,
         }
 
         if not semgrep:
@@ -1609,7 +1699,19 @@ def run_scan(args: argparse.Namespace) -> int:
                 "version": None,
             }
         else:
-            osv = shutil.which("osv-scanner")
+            osv_attempts: List[Dict[str, str]] = []
+            osv_image = getattr(args, "osv_scanner_image", OSV_SCANNER_IMAGE)
+            osv = resolve_scanner_runner(
+                "osv-scanner",
+                image=osv_image,
+                target=target,
+                provision_root=provision_root,
+                environment=environment,
+                docker=docker,
+                provision=args.provision,
+                attempts=osv_attempts,
+            )
+            metadata["provisioning"]["osv-scanner"] = osv_attempts
             if not osv:
                 metadata["scanners"]["osv"] = {
                     "status": "unavailable",
@@ -1621,17 +1723,15 @@ def run_scan(args: argparse.Namespace) -> int:
             elif not args.allow_network:
                 metadata["scanners"]["osv"] = {
                     "status": "blocked",
-                    "version": tool_version(
-                        osv, ["--version"], target, env=environment
-                    ),
+                    "version": runner_version(osv, ["--version"], target, environment),
+                    **runner_metadata(osv),
                 }
                 metadata["limitations"].append(
                     "OSV advisory database access was not authorized."
                 )
             else:
                 raw_osv = temporary_path / "osv.json"
-                command = [
-                    osv,
+                command_args = [
                     "scan",
                     "--format",
                     "json",
@@ -1639,9 +1739,17 @@ def run_scan(args: argparse.Namespace) -> int:
                     str(osv_config),
                 ]
                 for lockfile in lockfiles:
-                    command.extend(["--lockfile", str(target / lockfile)])
+                    command_args.extend(["--lockfile", str(target / lockfile)])
+                full_cmd = scanner_command(
+                    osv,
+                    command_args,
+                    target=target,
+                    run_dir=run_dir,
+                    temporary_path=temporary_path,
+                    allow_network=True,
+                )
                 result, stdout, stderr = command_result(
-                    command,
+                    full_cmd,
                     cwd=target,
                     timeout=args.timeout,
                     env=environment,
@@ -1650,14 +1758,18 @@ def run_scan(args: argparse.Namespace) -> int:
                 loaded = False
                 try:
                     raw = read_optional_report(raw_osv)
-                    safe_report, normalized = sanitize_osv(raw, target)
+                    safe_report, normalized = sanitize_osv(
+                        raw,
+                        target,
+                        (Path("/src"),) if osv["kind"] == "docker" else (),
+                    )
                     atomic_write_json(run_dir / "scanner" / "osv.json", safe_report)
                     all_findings.extend(normalized)
                     add_scanner_coverage(
                         files,
                         (
-                            result["source"]["path"]
-                            for result in safe_report["results"]
+                            res["source"]["path"]
+                            for res in safe_report["results"]
                         ),
                         "OSV-Scanner",
                     )
@@ -1670,14 +1782,89 @@ def run_scan(args: argparse.Namespace) -> int:
                     accepted_finding_exit_codes={0, 1},
                     diagnostics=stderr,
                 )
-                status["version"] = tool_version(
-                    osv, ["--version"], target, env=environment
-                )
+                status["version"] = runner_version(osv, ["--version"], target, environment)
+                status.update(runner_metadata(osv))
                 metadata["scanners"]["osv"] = status
                 if status["status"] != "completed":
                     metadata["limitations"].append(
                         "OSV-Scanner did not complete successfully."
                     )
+
+        trivy_image = getattr(args, "trivy_image", TRIVY_IMAGE)
+        trivy = resolve_scanner_runner(
+            "trivy",
+            image=trivy_image,
+            target=target,
+            provision_root=provision_root,
+            environment=environment,
+            docker=docker,
+            provision=args.provision,
+            attempts=trivy_attempts,
+        )
+        metadata["provisioning"]["trivy"] = trivy_attempts
+        if not trivy:
+            metadata["scanners"]["trivy"] = {
+                "status": "unavailable",
+                "version": None,
+            }
+        else:
+            raw_trivy = temporary_path / "trivy.json"
+            command_args = [
+                "config",
+                "--format",
+                "json",
+                "--output",
+                str(raw_trivy),
+                str(target),
+            ]
+            full_cmd = scanner_command(
+                trivy,
+                command_args,
+                target=target,
+                run_dir=run_dir,
+                temporary_path=temporary_path,
+                allow_network=False,
+            )
+            result, stdout, stderr = command_result(
+                full_cmd,
+                cwd=target,
+                timeout=args.timeout,
+                env=environment,
+            )
+            loaded = False
+            try:
+                raw = read_optional_report(raw_trivy, successful_empty=result["exit_code"] == 0)
+                safe_report, normalized = sanitize_trivy(
+                    raw,
+                    target,
+                    (Path("/src"),) if trivy["kind"] == "docker" else (),
+                )
+                atomic_write_json(run_dir / "scanner" / "trivy.json", safe_report)
+                all_findings.extend(normalized)
+                add_scanner_coverage(
+                    files,
+                    (
+                        res["target"]
+                        for res in safe_report["results"]
+                    ),
+                    "Trivy",
+                )
+                loaded = True
+            except AuditError as error:
+                stderr += f"\n{error}"
+            status = scanner_status(
+                result=result,
+                report_loaded=loaded,
+                accepted_finding_exit_codes={0, 1},
+                diagnostics=stderr,
+            )
+            status["version"] = runner_version(trivy, ["--version"], target, environment)
+            status.update(runner_metadata(trivy))
+            metadata["scanners"]["trivy"] = status
+            if status["status"] != "completed":
+                metadata["limitations"].append(
+                    "Trivy did not complete successfully."
+                )
 
     findings = deduplicate_findings(all_findings)
     ensure_no_known_secret(findings, known_secrets)
@@ -2210,6 +2397,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--gitleaks-image",
         default=GITLEAKS_IMAGE,
         help="Fixed official Gitleaks container image to use when Docker is available",
+    )
+    scan.add_argument(
+        "--osv-scanner-image",
+        default=OSV_SCANNER_IMAGE,
+        help="Fixed official OSV-Scanner container image to use when Docker is available",
+    )
+    scan.add_argument(
+        "--trivy-image",
+        default=TRIVY_IMAGE,
+        help="Fixed official Trivy container image to use when Docker is available",
     )
     scan.add_argument(
         "--allow-registry",
